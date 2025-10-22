@@ -3,6 +3,8 @@ package keyStore
 import (
 	"expo-open-ota/config"
 	"fmt"
+	"log"
+	"time"
 )
 
 type KeysStorageType string
@@ -74,6 +76,12 @@ func GetPublicExpoKey() string {
 }
 
 func GetPrivateExpoKey() string {
+	start := time.Now()
+	log.Printf("[TRACE] GetPrivateExpoKey - START at %s", start.Format(time.RFC3339Nano))
+	defer func() {
+		log.Printf("[TRACE] GetPrivateExpoKey - END duration=%v", time.Since(start))
+	}()
+
 	storage, err := getStorage()
 	if err != nil {
 		return ""

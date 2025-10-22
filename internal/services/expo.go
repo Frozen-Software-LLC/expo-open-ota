@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"time"
 )
 
 type ExpoUserAccount struct {
@@ -82,6 +83,12 @@ func SetAuthHeaders(expoAuth types.ExpoAuth, req *http.Request) {
 }
 
 func makeGraphQLRequest(ctx context.Context, query string, variables map[string]interface{}, expoAuth types.ExpoAuth, result interface{}, headers map[string]string) error {
+	start := time.Now()
+	log.Printf("[TRACE] makeGraphQLRequest - START at %s", start.Format(time.RFC3339Nano))
+	defer func() {
+		log.Printf("[TRACE] makeGraphQLRequest - END duration=%v", time.Since(start))
+	}()
+
 	requestBody := map[string]interface{}{
 		"query":     query,
 		"variables": variables,
@@ -103,8 +110,11 @@ func makeGraphQLRequest(ctx context.Context, query string, variables map[string]
 		req.Header.Set(key, value)
 	}
 
+	log.Printf("[TRACE] makeGraphQLRequest - Sending HTTP request at %s", time.Now().Format(time.RFC3339Nano))
+	httpStart := time.Now()
 	client := &http.Client{}
 	resp, err := client.Do(req)
+	log.Printf("[TRACE] makeGraphQLRequest - HTTP request completed in %v", time.Since(httpStart))
 	if err != nil {
 		return err
 	}
@@ -303,6 +313,12 @@ func ComputeChannelMappingCacheKey(channelName string) string {
 }
 
 func FetchExpoChannelMapping(channelName string) (*ExpoChannelMapping, error) {
+	start := time.Now()
+	log.Printf("[TRACE] FetchExpoChannelMapping - START at %s for channel=%s", start.Format(time.RFC3339Nano), channelName)
+	defer func() {
+		log.Printf("[TRACE] FetchExpoChannelMapping - END duration=%v", time.Since(start))
+	}()
+
 	cache := cache2.GetCache()
 	cacheKey := ComputeChannelMappingCacheKey(channelName)
 	if cachedValue := cache.Get(cacheKey); cachedValue != "" {
@@ -362,10 +378,16 @@ func FetchExpoChannelMapping(channelName string) (*ExpoChannelMapping, error) {
 		headers["operationName"] = "FetchExpoChannelMapping"
 	}
 	ctx := context.Background()
+
+	log.Printf("[TRACE] FetchExpoChannelMapping - Calling makeGraphQLRequest at %s", time.Now().Format(time.RFC3339Nano))
+	gqlStart := time.Now()
 	if err := makeGraphQLRequest(ctx, query, variables, types.ExpoAuth{Token: &expoToken}, &resp, headers); err != nil {
+		log.Printf("[TRACE] FetchExpoChannelMapping - GraphQL request failed in %v: %v", time.Since(gqlStart), err)
 		return nil, err
 	}
+	log.Printf("[TRACE] FetchExpoChannelMapping - GraphQL request completed in %v", time.Since(gqlStart))
 
+	log.Printf("[TRACE] FetchExpoChannelMapping - Parsing branch mapping at %s", time.Now().Format(time.RFC3339Nano))
 	var branchMapping BranchMapping
 	if err := json.Unmarshal([]byte(resp.Data.App.ById.UpdateChannelByName.BranchMapping), &branchMapping); err != nil {
 		return nil, err
@@ -394,6 +416,7 @@ func FetchExpoChannelMapping(channelName string) (*ExpoChannelMapping, error) {
 		return nil, nil
 	}
 
+	log.Printf("[TRACE] FetchExpoChannelMapping - Found branch mapping: branch=%s", branchName)
 	result := &ExpoChannelMapping{
 		Id:         resp.Data.App.ById.UpdateChannelByName.ID,
 		BranchName: branchName,

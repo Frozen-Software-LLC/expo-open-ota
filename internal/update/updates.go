@@ -10,6 +10,7 @@ import (
 	"expo-open-ota/internal/types"
 	"expo-open-ota/internal/version"
 	"fmt"
+	"log"
 	"mime"
 	"net/url"
 	"sort"
@@ -189,9 +190,19 @@ func AreUpdatesIdentical(update1, update2 types.Update) (bool, error) {
 }
 
 func GetLatestUpdateBundlePathForRuntimeVersion(branch string, runtimeVersion string, platform string) (*types.Update, error) {
+	start := time.Now()
+	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - START at %s for branch=%s runtime=%s platform=%s", start.Format(time.RFC3339Nano), branch, runtimeVersion, platform)
+	defer func() {
+		log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - END duration=%v", time.Since(start))
+	}()
+
 	cache := cache2.GetCache()
 	cacheKey := ComputeLastUpdateCacheKey(branch, runtimeVersion, platform)
+
+	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Checking cache at %s", time.Now().Format(time.RFC3339Nano))
+	cacheStart := time.Now()
 	if cachedValue := cache.Get(cacheKey); cachedValue != "" {
+		log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Cache hit in %v", time.Since(cacheStart))
 		var update types.Update
 		err := json.Unmarshal([]byte(cachedValue), &update)
 		if err != nil {
@@ -199,16 +210,26 @@ func GetLatestUpdateBundlePathForRuntimeVersion(branch string, runtimeVersion st
 		}
 		return &update, nil
 	}
+	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Cache miss in %v", time.Since(cacheStart))
+
+	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Fetching all updates at %s", time.Now().Format(time.RFC3339Nano))
+	getAllStart := time.Now()
 	updates, err := GetAllUpdatesForRuntimeVersion(branch, runtimeVersion, platform)
+	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - GetAllUpdatesForRuntimeVersion completed in %v", time.Since(getAllStart))
 	if err != nil {
 		return nil, err
 	}
+
+	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Filtering %d updates at %s", len(updates), time.Now().Format(time.RFC3339Nano))
+	filterStart := time.Now()
 	filteredUpdates := make([]types.Update, 0)
 	for _, update := range updates {
 		if IsUpdateValid(update) {
 			filteredUpdates = append(filteredUpdates, update)
 		}
 	}
+	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Filtering completed in %v, found %d valid updates", time.Since(filterStart), len(filteredUpdates))
+
 	if len(filteredUpdates) > 0 {
 		cacheValue, err := json.Marshal(filteredUpdates[0])
 		if err != nil {
@@ -251,9 +272,19 @@ func GetExpoConfig(update types.Update) (json.RawMessage, error) {
 }
 
 func GetMetadata(update types.Update) (types.UpdateMetadata, error) {
+	start := time.Now()
+	log.Printf("[TRACE] GetMetadata - START at %s for updateId=%s", start.Format(time.RFC3339Nano), update.UpdateId)
+	defer func() {
+		log.Printf("[TRACE] GetMetadata - END duration=%v", time.Since(start))
+	}()
+
 	metadataCacheKey := ComputeMetadataCacheKey(update.Branch, update.RuntimeVersion, update.UpdateId)
 	cache := cache2.GetCache()
+
+	log.Printf("[TRACE] GetMetadata - Checking cache at %s", time.Now().Format(time.RFC3339Nano))
+	cacheStart := time.Now()
 	if cachedValue := cache.Get(metadataCacheKey); cachedValue != "" {
+		log.Printf("[TRACE] GetMetadata - Cache hit in %v", time.Since(cacheStart))
 		var metadata types.UpdateMetadata
 		err := json.Unmarshal([]byte(cachedValue), &metadata)
 		if err != nil {
@@ -261,16 +292,25 @@ func GetMetadata(update types.Update) (types.UpdateMetadata, error) {
 		}
 		return metadata, nil
 	}
+	log.Printf("[TRACE] GetMetadata - Cache miss in %v", time.Since(cacheStart))
+
+	log.Printf("[TRACE] GetMetadata - Getting file from bucket at %s", time.Now().Format(time.RFC3339Nano))
+	bucketStart := time.Now()
 	resolvedBucket := bucket.GetBucket()
 	file, errFile := resolvedBucket.GetFile(update, "metadata.json")
+	log.Printf("[TRACE] GetMetadata - Bucket GetFile completed in %v", time.Since(bucketStart))
 	if errFile != nil || file == nil {
 		return types.UpdateMetadata{}, errFile
 	}
 	createdAt := file.CreatedAt
 	var metadata types.UpdateMetadata
 	var metadataJson types.MetadataObject
+
+	log.Printf("[TRACE] GetMetadata - Decoding metadata JSON at %s", time.Now().Format(time.RFC3339Nano))
+	decodeStart := time.Now()
 	err := json.NewDecoder(file.Reader).Decode(&metadataJson)
 	defer file.Reader.Close()
+	log.Printf("[TRACE] GetMetadata - JSON decode completed in %v", time.Since(decodeStart))
 	if err != nil {
 		fmt.Println("error decoding metadata json:", err)
 		return types.UpdateMetadata{}, err
@@ -282,6 +322,9 @@ func GetMetadata(update types.Update) (types.UpdateMetadata, error) {
 	if err != nil {
 		return types.UpdateMetadata{}, err
 	}
+
+	log.Printf("[TRACE] GetMetadata - Computing hashes at %s", time.Now().Format(time.RFC3339Nano))
+	hashStart := time.Now()
 	hashInput := fmt.Sprintf("%s::%s::%s::%s", string(stringifiedMetadata), update.UpdateId, update.Branch, update.RuntimeVersion)
 	id, errHash := crypto.CreateHash([]byte(hashInput), "sha256", "hex")
 
@@ -293,6 +336,8 @@ func GetMetadata(update types.Update) (types.UpdateMetadata, error) {
 	if errHash != nil {
 		return types.UpdateMetadata{}, errHash
 	}
+	log.Printf("[TRACE] GetMetadata - Hash computation completed in %v", time.Since(hashStart))
+
 	metadata.ID = id
 	metadata.Fingerprint = fingerprint
 	cacheValue, err := json.Marshal(metadata)
@@ -413,9 +458,19 @@ func ComposeUpdateManifest(
 	update types.Update,
 	platform string,
 ) (types.UpdateManifest, error) {
+	start := time.Now()
+	log.Printf("[TRACE] ComposeUpdateManifest - START at %s for updateId=%s platform=%s", start.Format(time.RFC3339Nano), update.UpdateId, platform)
+	defer func() {
+		log.Printf("[TRACE] ComposeUpdateManifest - END duration=%v", time.Since(start))
+	}()
+
 	cache := cache2.GetCache()
 	cacheKey := ComputeUpdataManifestCacheKey(update.Branch, update.RuntimeVersion, update.UpdateId, platform)
+
+	log.Printf("[TRACE] ComposeUpdateManifest - Checking cache at %s", time.Now().Format(time.RFC3339Nano))
+	cacheStart := time.Now()
 	if cachedValue := cache.Get(cacheKey); cachedValue != "" {
+		log.Printf("[TRACE] ComposeUpdateManifest - Cache hit in %v", time.Since(cacheStart))
 		var manifest types.UpdateManifest
 		err := json.Unmarshal([]byte(cachedValue), &manifest)
 		if err != nil {
@@ -423,11 +478,20 @@ func ComposeUpdateManifest(
 		}
 		return manifest, nil
 	}
+	log.Printf("[TRACE] ComposeUpdateManifest - Cache miss in %v", time.Since(cacheStart))
+
+	log.Printf("[TRACE] ComposeUpdateManifest - Getting expo config at %s", time.Now().Format(time.RFC3339Nano))
+	configStart := time.Now()
 	expoConfig, errConfig := GetExpoConfig(update)
+	log.Printf("[TRACE] ComposeUpdateManifest - GetExpoConfig completed in %v", time.Since(configStart))
 	if errConfig != nil {
 		return types.UpdateManifest{}, errConfig
 	}
+
+	log.Printf("[TRACE] ComposeUpdateManifest - Retrieving stored metadata at %s", time.Now().Format(time.RFC3339Nano))
+	metadataStart := time.Now()
 	storedMetadata, _ := RetrieveUpdateStoredMetadata(update)
+	log.Printf("[TRACE] ComposeUpdateManifest - RetrieveUpdateStoredMetadata completed in %v", time.Since(metadataStart))
 	if storedMetadata == nil || storedMetadata.UpdateUUID == "" {
 		storedMetadata = &types.UpdateStoredMetadata{
 			Platform:   platform,
@@ -446,6 +510,9 @@ func ComposeUpdateManifest(
 	if platformSpecificMetadata.Bundle == "" {
 		return types.UpdateManifest{}, fmt.Errorf("platform %s not supported", platform)
 	}
+
+	log.Printf("[TRACE] ComposeUpdateManifest - Shaping %d assets in parallel at %s", len(platformSpecificMetadata.Assets), time.Now().Format(time.RFC3339Nano))
+	assetsStart := time.Now()
 	var (
 		assets = make([]types.ManifestAsset, len(platformSpecificMetadata.Assets))
 		errs   = make(chan error, len(platformSpecificMetadata.Assets))
@@ -467,15 +534,19 @@ func ComposeUpdateManifest(
 
 	wg.Wait()
 	close(errs)
+	log.Printf("[TRACE] ComposeUpdateManifest - Asset shaping completed in %v", time.Since(assetsStart))
 
 	if len(errs) > 0 {
 		return types.UpdateManifest{}, <-errs
 	}
 
+	log.Printf("[TRACE] ComposeUpdateManifest - Shaping launch asset at %s", time.Now().Format(time.RFC3339Nano))
+	launchStart := time.Now()
 	launchAsset, errShape := shapeManifestAsset(update, &types.Asset{
 		Path: platformSpecificMetadata.Bundle,
 		Ext:  "",
 	}, true, platform)
+	log.Printf("[TRACE] ComposeUpdateManifest - Launch asset shaping completed in %v", time.Since(launchStart))
 	if errShape != nil {
 		return types.UpdateManifest{}, errShape
 	}

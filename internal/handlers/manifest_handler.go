@@ -14,11 +14,18 @@ import (
 	"mime/multipart"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 )
 
 func createMultipartResponse(headers map[string][]string, jsonContent interface{}) (*multipart.Writer, *bytes.Buffer, error) {
+	start := time.Now()
+	log.Printf("[TRACE] createMultipartResponse - START at %s", start.Format(time.RFC3339Nano))
+	defer func() {
+		log.Printf("[TRACE] createMultipartResponse - END duration=%v", time.Since(start))
+	}()
+
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 	field, err := writer.CreatePart(headers)
@@ -36,6 +43,12 @@ func createMultipartResponse(headers map[string][]string, jsonContent interface{
 }
 
 func signDirectiveOrManifest(content interface{}, expectSignatureHeader string) (string, error) {
+	start := time.Now()
+	log.Printf("[TRACE] signDirectiveOrManifest - START at %s", start.Format(time.RFC3339Nano))
+	defer func() {
+		log.Printf("[TRACE] signDirectiveOrManifest - END duration=%v", time.Since(start))
+	}()
+
 	if expectSignatureHeader == "" {
 		return "", nil
 	}
@@ -52,6 +65,12 @@ func signDirectiveOrManifest(content interface{}, expectSignatureHeader string) 
 }
 
 func writeResponse(w http.ResponseWriter, writer *multipart.Writer, buf *bytes.Buffer, protocolVersion int64, runtimeVersion string, requestID string) {
+	start := time.Now()
+	log.Printf("[TRACE] [RequestID: %s] writeResponse - START at %s", requestID, start.Format(time.RFC3339Nano))
+	defer func() {
+		log.Printf("[TRACE] [RequestID: %s] writeResponse - END duration=%v", requestID, time.Since(start))
+	}()
+
 	w.Header().Set("expo-protocol-version", strconv.FormatInt(protocolVersion, 10))
 	w.Header().Set("expo-sfv-version", "0")
 	w.Header().Set("cache-control", "private, max-age=0")
@@ -67,6 +86,12 @@ func writeResponse(w http.ResponseWriter, writer *multipart.Writer, buf *bytes.B
 }
 
 func putResponse(w http.ResponseWriter, r *http.Request, content interface{}, fieldName string, runtimeVersion string, protocolVersion int64, requestID string) {
+	start := time.Now()
+	log.Printf("[TRACE] [RequestID: %s] putResponse - START at %s", requestID, start.Format(time.RFC3339Nano))
+	defer func() {
+		log.Printf("[TRACE] [RequestID: %s] putResponse - END duration=%v", requestID, time.Since(start))
+	}()
+
 	signedHash, err := signDirectiveOrManifest(content, r.Header.Get("expo-expect-signature"))
 	if err != nil {
 		log.Printf("[RequestID: %s] Error signing content: %v", requestID, err)
@@ -91,6 +116,12 @@ func putResponse(w http.ResponseWriter, r *http.Request, content interface{}, fi
 }
 
 func putUpdateInResponse(w http.ResponseWriter, r *http.Request, lastUpdate types.Update, platform string, protocolVersion int64, requestID string) {
+	start := time.Now()
+	log.Printf("[TRACE] [RequestID: %s] putUpdateInResponse - START at %s", requestID, start.Format(time.RFC3339Nano))
+	defer func() {
+		log.Printf("[TRACE] [RequestID: %s] putUpdateInResponse - END duration=%v", requestID, time.Since(start))
+	}()
+
 	currentUpdateId := r.Header.Get("expo-current-update-id")
 	metadata, err := update.GetMetadata(lastUpdate)
 	if err != nil {
@@ -117,6 +148,12 @@ func putUpdateInResponse(w http.ResponseWriter, r *http.Request, lastUpdate type
 }
 
 func putRollbackInResponse(w http.ResponseWriter, r *http.Request, lastUpdate types.Update, platform string, protocolVersion int64, requestID string) {
+	start := time.Now()
+	log.Printf("[TRACE] [RequestID: %s] putRollbackInResponse - START at %s", requestID, start.Format(time.RFC3339Nano))
+	defer func() {
+		log.Printf("[TRACE] [RequestID: %s] putRollbackInResponse - END duration=%v", requestID, time.Since(start))
+	}()
+
 	if protocolVersion == 0 {
 		http.Error(w, "Rollback not supported in protocol version 0", http.StatusBadRequest)
 		return
@@ -142,6 +179,12 @@ func putRollbackInResponse(w http.ResponseWriter, r *http.Request, lastUpdate ty
 }
 
 func putNoUpdateAvailableInResponse(w http.ResponseWriter, r *http.Request, runtimeVersion string, protocolVersion int64, requestID string) {
+	start := time.Now()
+	log.Printf("[TRACE] [RequestID: %s] putNoUpdateAvailableInResponse - START at %s", requestID, start.Format(time.RFC3339Nano))
+	defer func() {
+		log.Printf("[TRACE] [RequestID: %s] putNoUpdateAvailableInResponse - END duration=%v", requestID, time.Since(start))
+	}()
+
 	if protocolVersion == 0 {
 		http.Error(w, "NoUpdateAvailable directive not available in protocol version 0", http.StatusNoContent)
 		return
@@ -152,6 +195,11 @@ func putNoUpdateAvailableInResponse(w http.ResponseWriter, r *http.Request, runt
 
 func ManifestHandler(w http.ResponseWriter, r *http.Request) {
 	requestID := uuid.New().String()
+	handlerStart := time.Now()
+	log.Printf("[TRACE] [RequestID: %s] ManifestHandler - START at %s", requestID, handlerStart.Format(time.RFC3339Nano))
+	defer func() {
+		log.Printf("[TRACE] [RequestID: %s] ManifestHandler - END duration=%v", requestID, time.Since(handlerStart))
+	}()
 
 	channelName := r.Header.Get("expo-channel-name")
 	if channelName == "" {
@@ -159,7 +207,11 @@ func ManifestHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No channel name provided", http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("[TRACE] [RequestID: %s] Calling FetchExpoChannelMapping at %s", requestID, time.Now().Format(time.RFC3339Nano))
+	branchMapStart := time.Now()
 	branchMap, err := services.FetchExpoChannelMapping(channelName)
+	log.Printf("[TRACE] [RequestID: %s] FetchExpoChannelMapping completed in %v", requestID, time.Since(branchMapStart))
 	if err != nil {
 		log.Printf("[RequestID: %s] Error fetching channel mapping: %v", requestID, err)
 		http.Error(w, fmt.Sprintf("Error fetching channel mapping: %v", err), http.StatusInternalServerError)
@@ -197,21 +249,28 @@ func ManifestHandler(w http.ResponseWriter, r *http.Request) {
 	hasJsonError := expoFatalError != ""
 	if hasJsonError {
 		if currentUpdateId != "" {
+			log.Printf("[TRACE] [RequestID: %s] Calling TrackUpdateErrorUsers at %s", requestID, time.Now().Format(time.RFC3339Nano))
 			metrics.TrackUpdateErrorUsers(clientId, platform, runtimeVersion, branch, currentUpdateId)
 		} else {
 			recentFailedUpdateId := r.Header.Get("Expo-Recent-Failed-Update-Ids")
 			if recentFailedUpdateId != "" {
+				log.Printf("[TRACE] [RequestID: %s] Calling TrackUpdateErrorUsers at %s", requestID, time.Now().Format(time.RFC3339Nano))
 				metrics.TrackUpdateErrorUsers(clientId, platform, runtimeVersion, branch, recentFailedUpdateId)
 			}
 		}
 	}
+	log.Printf("[TRACE] [RequestID: %s] Calling TrackActiveUser at %s", requestID, time.Now().Format(time.RFC3339Nano))
 	metrics.TrackActiveUser(clientId, platform, runtimeVersion, branch, currentUpdateId)
 	if runtimeVersion == "" {
 		log.Printf("[RequestID: %s] No runtime version provided", requestID)
 		http.Error(w, "No runtime version provided", http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("[TRACE] [RequestID: %s] Calling GetLatestUpdateBundlePathForRuntimeVersion at %s", requestID, time.Now().Format(time.RFC3339Nano))
+	latestUpdateStart := time.Now()
 	lastUpdate, err := update.GetLatestUpdateBundlePathForRuntimeVersion(branch, runtimeVersion, platform)
+	log.Printf("[TRACE] [RequestID: %s] GetLatestUpdateBundlePathForRuntimeVersion completed in %v", requestID, time.Since(latestUpdateStart))
 	if err != nil {
 		log.Printf("[RequestID: %s] Error getting latest update: %v", requestID, err)
 		http.Error(w, "Error getting latest update", http.StatusInternalServerError)
@@ -223,10 +282,13 @@ func ManifestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("[TRACE] [RequestID: %s] Calling GetUpdateType at %s", requestID, time.Now().Format(time.RFC3339Nano))
 	updateType := update.GetUpdateType(*lastUpdate)
 	if updateType == types.NormalUpdate {
+		log.Printf("[TRACE] [RequestID: %s] Calling putUpdateInResponse at %s", requestID, time.Now().Format(time.RFC3339Nano))
 		putUpdateInResponse(w, r, *lastUpdate, platform, protocolVersion, requestID)
 	} else {
+		log.Printf("[TRACE] [RequestID: %s] Calling putRollbackInResponse at %s", requestID, time.Now().Format(time.RFC3339Nano))
 		putRollbackInResponse(w, r, *lastUpdate, platform, protocolVersion, requestID)
 	}
 }

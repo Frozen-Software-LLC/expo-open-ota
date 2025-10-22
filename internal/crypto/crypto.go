@@ -15,7 +15,9 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"log"
 	"strings"
+	"time"
 )
 
 func CreateHash(data []byte, hashingAlgorithm, encoding string) (string, error) {
@@ -65,6 +67,12 @@ func GetBase64URLEncoding(encodedString string) string {
 }
 
 func SignRSASHA256(data, privateKeyPEM string) (string, error) {
+	start := time.Now()
+	log.Printf("[TRACE] SignRSASHA256 - START at %s", start.Format(time.RFC3339Nano))
+	defer func() {
+		log.Printf("[TRACE] SignRSASHA256 - END duration=%v", time.Since(start))
+	}()
+
 	block, _ := pem.Decode([]byte(privateKeyPEM))
 	if block == nil {
 		return "", errors.New("invalid private key PEM format")

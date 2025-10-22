@@ -3,7 +3,9 @@ package metrics
 import (
 	"expo-open-ota/internal/cache"
 	"fmt"
+	"log"
 	"net/http"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -79,6 +81,12 @@ func TrackUpdateErrorUsers(clientId, platform, runtime, branch, update string) {
 }
 
 func TrackActiveUser(clientId, platform, runtime, branch, update string) {
+	start := time.Now()
+	log.Printf("[TRACE] TrackActiveUser - START at %s", start.Format(time.RFC3339Nano))
+	defer func() {
+		log.Printf("[TRACE] TrackActiveUser - END duration=%v", time.Since(start))
+	}()
+
 	if clientId == "" || platform == "" || branch == "" || update == "" || runtime == "" {
 		return
 	}
