@@ -3,6 +3,7 @@ package bucket
 import (
 	"bufio"
 	"errors"
+	"strings"
 	"expo-open-ota/config"
 	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/types"
@@ -96,7 +97,11 @@ func (b *LocalBucket) GetFile(update types.Update, assetPath string) (*types.Buc
 		return nil, errors.New("BasePath not set")
 	}
 
-	filePath := filepath.Join(b.BasePath, update.Branch, update.RuntimeVersion, update.UpdateId, assetPath)
+	expectedBase := filepath.Join(b.BasePath, update.Branch, update.RuntimeVersion, update.UpdateId)
+	filePath := filepath.Join(expectedBase, assetPath)
+	if !strings.HasPrefix(filePath, expectedBase) {
+		return nil, errors.New("invalid asset path")
+	}
 
 	file, err := os.Open(filePath)
 	if err != nil {

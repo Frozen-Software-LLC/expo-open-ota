@@ -78,16 +78,22 @@ type SettingsEnv struct {
 	PROMETHEUS_ENABLED                     string `json:"PROMETHEUS_ENABLED"`
 }
 
+func maskSecret(value string) string {
+	if len(value) < 5 {
+		return "***"
+	}
+	return "***" + value[:5]
+}
+
 func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Retrieve all in config.GetEnv & return as JSON
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(SettingsEnv{
-		BASE_URL:    config.GetEnv("BASE_URL"),
-		EXPO_APP_ID: config.GetEnv("EXPO_APP_ID"),
-		// Only retrieve the first 5 characters of the token
-		EXPO_ACCESS_TOKEN:                      "***" + config.GetEnv("EXPO_ACCESS_TOKEN")[:5],
+		BASE_URL:                               config.GetEnv("BASE_URL"),
+		EXPO_APP_ID:                            config.GetEnv("EXPO_APP_ID"),
+		EXPO_ACCESS_TOKEN:                      maskSecret(config.GetEnv("EXPO_ACCESS_TOKEN")),
 		CACHE_MODE:                             config.GetEnv("CACHE_MODE"),
 		REDIS_HOST:                             config.GetEnv("REDIS_HOST"),
 		REDIS_PORT:                             config.GetEnv("REDIS_PORT"),
@@ -102,10 +108,10 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		PRIVATE_LOCAL_EXPO_KEY_PATH:            config.GetEnv("PRIVATE_LOCAL_EXPO_KEY_PATH"),
 		AWS_REGION:                             config.GetEnv("AWS_REGION"),
 		AWS_BASE_ENDPOINT:                      config.GetEnv("AWS_BASE_ENDPOINT"),
-		AWS_ACCESS_KEY_ID:                      config.GetEnv("AWS_ACCESS_KEY_ID"),
+		AWS_ACCESS_KEY_ID:                      maskSecret(config.GetEnv("AWS_ACCESS_KEY_ID")),
 		CLOUDFRONT_DOMAIN:                      config.GetEnv("CLOUDFRONT_DOMAIN"),
-		CLOUDFRONT_KEY_PAIR_ID:                 config.GetEnv("CLOUDFRONT_KEY_PAIR_ID"),
-		CLOUDFRONT_PRIVATE_KEY_B64:             config.GetEnv("CLOUDFRONT_PRIVATE_KEY_B64"),
+		CLOUDFRONT_KEY_PAIR_ID:                 maskSecret(config.GetEnv("CLOUDFRONT_KEY_PAIR_ID")),
+		CLOUDFRONT_PRIVATE_KEY_B64:             maskSecret(config.GetEnv("CLOUDFRONT_PRIVATE_KEY_B64")),
 		AWSSM_CLOUDFRONT_PRIVATE_KEY_SECRET_ID: config.GetEnv("AWSSM_CLOUDFRONT_PRIVATE_KEY_SECRET_ID"),
 		PRIVATE_LOCAL_CLOUDFRONT_KEY_PATH:      config.GetEnv("PRIVATE_LOCAL_CLOUDFRONT_KEY_PATH"),
 		PROMETHEUS_ENABLED:                     config.GetEnv("PROMETHEUS_ENABLED"),

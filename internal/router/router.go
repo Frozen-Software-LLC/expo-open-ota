@@ -80,7 +80,10 @@ func NewRouter() *mux.Router {
 			for _, ext := range staticExtensions {
 				if len(r.URL.Path) > len(ext) && r.URL.Path[len(r.URL.Path)-len(ext):] == ext {
 					filePath := filepath.Join(dashboardPath, r.URL.Path[len("/dashboard/"):])
-					fmt.Println("Serving file", filePath)
+					if !strings.HasPrefix(filePath, dashboardPath) {
+						http.Error(w, "Forbidden", http.StatusForbidden)
+						return
+					}
 					http.ServeFile(w, r, filePath)
 					return
 				}
