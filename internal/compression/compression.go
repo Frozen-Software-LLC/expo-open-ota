@@ -37,12 +37,7 @@ func ServeCompressedAsset(w http.ResponseWriter, r *http.Request, data []byte, c
 	acceptEncoding := r.Header.Get("Accept-Encoding")
 	log.Printf("[RequestID: %s] Serving asset with content type: %s", requestID, contentType)
 
-	if strings.Contains(acceptEncoding, "br") {
-		if err := compressWithBrotli(w, data, requestID); err != nil {
-			http.Error(w, "Error compressing with Brotli", http.StatusInternalServerError)
-			return
-		}
-	} else if strings.Contains(acceptEncoding, "gzip") {
+	if strings.Contains(acceptEncoding, "gzip") {
 		if err := compressWithGzip(w, data, requestID); err != nil {
 			http.Error(w, "Error compressing with Gzip", http.StatusInternalServerError)
 			return

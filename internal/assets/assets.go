@@ -55,6 +55,7 @@ func getAssetMetadata(req AssetsRequest, returnAsset bool) (AssetsResponse, *typ
 			"expo-protocol-version": "1",
 			"expo-sfv-version":      "0",
 			"Cache-Control":         "public, max-age=31536000",
+			"Vary":                  "Accept-Encoding",
 		}
 		return AssetsResponse{
 			StatusCode: http.StatusOK,
@@ -106,6 +107,7 @@ func getAssetMetadata(req AssetsRequest, returnAsset bool) (AssetsResponse, *typ
 		"expo-protocol-version": "1",
 		"expo-sfv-version":      "0",
 		"Cache-Control":         "public, max-age=31536000",
+			"Vary":                  "Accept-Encoding",
 		"Content-Type":          contentType,
 	}
 
