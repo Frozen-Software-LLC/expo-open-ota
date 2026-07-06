@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 func sortUpdates(updates []types.Update) []types.Update {
@@ -247,32 +249,57 @@ func GetLatestUpdateBundlePathForRuntimeVersion(branch string, runtimeVersion st
 	}
 	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Cache miss in %v", time.Since(cacheStart))
 
-	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Fetching all updates at %s", time.Now().Format(time.RFC3339Nano))
-	getAllStart := time.Now()
-	updates, err := GetAllUpdatesForRuntimeVersion(branch, runtimeVersion, platform)
-	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - GetAllUpdatesForRuntimeVersion completed in %v", time.Since(getAllStart))
+	// A publish deletes this key, so every polling device misses at once. One scan
+	// runs per key; the rest wait for its result instead of each scanning the bucket.
+	result, err, _ := latestUpdateFlight.Do(cacheKey, func() (interface{}, error) {
+		return scanLatestUpdate(branch, runtimeVersion, platform, cacheKey)
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Filtering %d updates at %s", len(updates), time.Now().Format(time.RFC3339Nano))
-	filterStart := time.Now()
-	filteredUpdates := make([]types.Update, 0)
-	for _, update := range updates {
-		if IsUpdateValid(update) {
-			filteredUpdates = append(filteredUpdates, update)
-		}
+	latest := result.(*types.Update)
+	if latest == nil {
+		return nil, nil
 	}
-	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Filtering completed in %v, found %d valid updates", time.Since(filterStart), len(filteredUpdates))
+	latestCopy := *latest
+	return &latestCopy, nil
+}
 
-	if len(filteredUpdates) > 0 {
-		cacheValue, err := json.Marshal(filteredUpdates[0])
-		if err != nil {
-			return &filteredUpdates[0], nil
+var latestUpdateFlight singleflight.Group
+
+func scanLatestUpdate(branch string, runtimeVersion string, platform string, cacheKey string) (*types.Update, error) {
+	cache := cache2.GetCache()
+	// List the runtime's updates (the bucket derives CreatedAt from the updateId, so
+	// we can sort newest-first WITHOUT reading any per-update metadata) and scan once,
+	// reading update-metadata.json + .check only until the first update that matches
+	// the platform AND is valid. That update is the latest (newest-first order), so
+	// the result is identical to filtering+validating every update — but a cold cache
+	// miss now does O(1) bucket reads in the common case (newest update matches)
+	// instead of O(N) (N=82 for an active runtime). The previous code read metadata
+	// for every update (filterPlatformUpdates) AND .check for every update, so a
+	// foreground herd at the 1800s lastUpdate TTL expiry stampeded the origin.
+	resolvedBucket := bucket.GetBucket()
+	updates, err := resolvedBucket.GetUpdates(branch, runtimeVersion)
+	if err != nil {
+		return nil, err
+	}
+	updates = sortUpdates(updates)
+	for i := range updates {
+		storedMetadata, metaErr := RetrieveUpdateStoredMetadata(updates[i])
+		if metaErr != nil || storedMetadata == nil || storedMetadata.Platform != platform {
+			continue
+		}
+		if !IsUpdateValid(updates[i]) {
+			continue
+		}
+		latest := updates[i]
+		cacheValue, marshalErr := json.Marshal(latest)
+		if marshalErr != nil {
+			return &latest, nil
 		}
 		ttl := 1800
-		err = cache.Set(cacheKey, string(cacheValue), &ttl)
-		return &filteredUpdates[0], nil
+		_ = cache.Set(cacheKey, string(cacheValue), &ttl)
+		return &latest, nil
 	}
 	return nil, nil
 }
