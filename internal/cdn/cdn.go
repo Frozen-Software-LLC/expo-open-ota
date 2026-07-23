@@ -19,9 +19,14 @@ func GetCDN() CDN {
 		if isCloudfrontCDNavailable {
 			cdnInstance = &cloudfrontCDN
 		} else {
-			gcsCDN := GCSDirectCDN{}
-			if (&gcsCDN).isCDNAvailable() {
-				cdnInstance = &gcsCDN
+			r2CDN := R2PublicCDN{}
+			if (&r2CDN).isCDNAvailable() {
+				cdnInstance = &r2CDN
+			} else {
+				gcsCDN := GCSDirectCDN{}
+				if (&gcsCDN).isCDNAvailable() {
+					cdnInstance = &gcsCDN
+				}
 			}
 		}
 	})
