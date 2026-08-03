@@ -359,6 +359,32 @@ func TestExactRevylUpdateSelectorReturnsHistoricalManifest(t *testing.T) {
 	assert.Equal(t, json.RawMessage("{\"branch\":\"branch-2\"}"), manifest.Metadata)
 }
 
+func TestExactRevylUpdateSelectorReturnsIOSManifest(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	mockWorkingExpoResponseForBranch("staging", "branch-2")
+
+	const updateUUID = "68e096e2-a619-9d56-7f7c-89f97bc27312"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "http://localhost:3000/manifest", nil)
+	r.Header.Add("expo-platform", "ios")
+	r.Header.Add("expo-runtime-version", "1")
+	r.Header.Add("expo-protocol-version", "1")
+	r.Header.Add("expo-channel-name", "revyl-ota-e2e-staging-"+updateUUID)
+
+	handlers.ManifestHandler(w, r)
+	assert.Equal(t, http.StatusOK, w.Code)
+	parts, err := ParseMultipartMixedResponse(w.Header().Get("Content-Type"), w.Body.Bytes())
+	assert.NoError(t, err)
+	if !assert.Len(t, parts, 1) {
+		return
+	}
+
+	var manifest types.UpdateManifest
+	assert.NoError(t, json.Unmarshal([]byte(parts[0].Body), &manifest))
+	assert.Equal(t, updateUUID, manifest.Id)
+}
+
 func TestExactRevylUpdateSelectorRejectsUnsafeRequests(t *testing.T) {
 	tests := []struct {
 		name    string
