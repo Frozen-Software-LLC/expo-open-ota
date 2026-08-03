@@ -331,6 +331,77 @@ func TestValidRequestForStagingManifest(t *testing.T) {
 	assert.Equal(t, "{\"id\":\"04b793a0-b6ab-fd4f-308c-b91d812adec2\",\"createdAt\":\"1990-01-01T00:00:00.000Z\",\"runtimeVersion\":\"1\",\"metadata\":{\"branch\":\"branch-1\"},\"assets\":[{\"hash\":\"JCcs2u_4LMX6zazNmCpvBbYMRQRwS7-UwZpjiGWYgLs\",\"key\":\"4f1cb2cac2370cd5050681232e8575a8\",\"fileExtension\":\".png\",\"contentType\":\"application/javascript\",\"url\":\"http://localhost:3000/assets?asset=assets%2F4f1cb2cac2370cd5050681232e8575a8\\u0026branch=branch-1\\u0026platform=android\\u0026runtimeVersion=1\"}],\"launchAsset\":{\"hash\":\"t3kWQ00Lhn5qCGGhNNMxiD_pcTO_4d7I_1zO3S5Me5k\",\"key\":\"82adadb1fb6e489d04ad95fd79670deb\",\"fileExtension\":\".bundle\",\"contentType\":\"\",\"url\":\"http://localhost:3000/assets?asset=bundles%2Fandroid-82adadb1fb6e489d04ad95fd79670deb.js\\u0026branch=branch-1\\u0026platform=android\\u0026runtimeVersion=1\"},\"extra\":{\"expoClient\":{\"name\":\"expo-updates-client\",\"slug\":\"expo-updates-client\",\"owner\":\"anonymous\",\"version\":\"1.0.0\",\"orientation\":\"portrait\",\"icon\":\"./assets/icon.png\",\"splash\":{\"image\":\"./assets/splash.png\",\"resizeMode\":\"contain\",\"backgroundColor\":\"#ffffff\"},\"runtimeVersion\":\"1\",\"updates\":{\"url\":\"http://localhost:3000/api/manifest\",\"enabled\":true,\"fallbackToCacheTimeout\":30000},\"assetBundlePatterns\":[\"**/*\"],\"ios\":{\"supportsTablet\":true,\"bundleIdentifier\":\"com.test.expo-updates-client\"},\"android\":{\"adaptiveIcon\":{\"foregroundImage\":\"./assets/adaptive-icon.png\",\"backgroundColor\":\"#FFFFFF\"},\"package\":\"com.test.expoupdatesclient\"},\"web\":{\"favicon\":\"./assets/favicon.png\"},\"sdkVersion\":\"47.0.0\",\"platforms\":[\"ios\",\"android\",\"web\"],\"currentFullName\":\"@anonymous/expo-updates-client\",\"originalFullName\":\"@anonymous/expo-updates-client\"},\"branch\":\"branch-1\"}}", body)
 }
 
+func TestExactRevylUpdateSelectorReturnsHistoricalManifest(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	mockWorkingExpoResponseForBranch("staging", "branch-2")
+
+	const historicalUUID = "d100f19f-e0be-45c4-212a-27d1f067552b"
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "http://localhost:3000/manifest", nil)
+	r.Header.Add("expo-platform", "android")
+	r.Header.Add("expo-runtime-version", "1")
+	r.Header.Add("expo-protocol-version", "1")
+	r.Header.Add("expo-channel-name", "revyl-ota-e2e-staging-"+historicalUUID)
+
+	handlers.ManifestHandler(w, r)
+	assert.Equal(t, http.StatusOK, w.Code)
+	parts, err := ParseMultipartMixedResponse(w.Header().Get("Content-Type"), w.Body.Bytes())
+	assert.NoError(t, err)
+	if !assert.Len(t, parts, 1) {
+		return
+	}
+	assert.True(t, IsMultipartPartWithName(parts[0], "manifest"))
+
+	var manifest types.UpdateManifest
+	assert.NoError(t, json.Unmarshal([]byte(parts[0].Body), &manifest))
+	assert.Equal(t, historicalUUID, manifest.Id)
+	assert.Equal(t, json.RawMessage("{\"branch\":\"branch-2\"}"), manifest.Metadata)
+}
+
+func TestExactRevylUpdateSelectorRejectsUnsafeRequests(t *testing.T) {
+	tests := []struct {
+		name    string
+		channel string
+	}{
+		{name: "missing UUID", channel: "revyl-ota-e2e-staging-"},
+		{name: "invalid UUID", channel: "revyl-ota-e2e-staging-not-a-uuid"},
+		{name: "nil UUID", channel: "revyl-ota-e2e-staging-00000000-0000-0000-0000-000000000000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			teardown := setup(t)
+			defer teardown()
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest("GET", "http://localhost:3000/manifest", nil)
+			r.Header.Add("expo-platform", "ios")
+			r.Header.Add("expo-runtime-version", "1")
+			r.Header.Add("expo-protocol-version", "1")
+			r.Header.Add("expo-channel-name", tt.channel)
+
+			handlers.ManifestHandler(w, r)
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+		})
+	}
+}
+
+func TestExactRevylUpdateSelectorReturnsNotFound(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	mockWorkingExpoResponseForBranch("staging", "branch-2")
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "http://localhost:3000/manifest", nil)
+	r.Header.Add("expo-platform", "android")
+	r.Header.Add("expo-runtime-version", "1")
+	r.Header.Add("expo-protocol-version", "1")
+	r.Header.Add("expo-channel-name", "revyl-ota-e2e-staging-11111111-1111-1111-1111-111111111111")
+
+	handlers.ManifestHandler(w, r)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Equal(t, "Exact update not found\n", w.Body.String())
+}
+
 func TestNoUpdatesResponseForManifest(t *testing.T) {
 	teardown := setup(t)
 	defer teardown()
@@ -635,7 +706,6 @@ func TestEmptyRequestForAndroid(t *testing.T) {
 	}
 	assert.Equal(t, "{\"type\":\"noUpdateAvailable\"}", body)
 }
-
 
 func TestPreWarmManifestCache(t *testing.T) {
 	teardown := setup(t)

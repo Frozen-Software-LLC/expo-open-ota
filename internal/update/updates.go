@@ -242,6 +242,32 @@ func GetLatestUpdateBundlePathForRuntimeVersion(branch string, runtimeVersion st
 	return nil, nil
 }
 
+// GetUpdateBundlePathForRuntimeVersionAndUUID returns one stored normal update.
+// It does not change the branch head. The caller must validate the UUID first.
+func GetUpdateBundlePathForRuntimeVersionAndUUID(branch string, runtimeVersion string, platform string, updateUUID string) (*types.Update, error) {
+	updates, err := GetAllUpdatesForRuntimeVersion(branch, runtimeVersion, platform)
+	if err != nil {
+		return nil, err
+	}
+
+	var matched *types.Update
+	for index := range updates {
+		candidate := updates[index]
+		if !IsUpdateValid(candidate) || GetUpdateType(candidate) != types.NormalUpdate {
+			continue
+		}
+		storedMetadata, err := RetrieveUpdateStoredMetadata(candidate)
+		if err != nil || storedMetadata == nil || storedMetadata.UpdateUUID != updateUUID {
+			continue
+		}
+		if matched != nil {
+			return nil, fmt.Errorf("update UUID matches more than one stored update")
+		}
+		matched = &candidate
+	}
+	return matched, nil
+}
+
 func GetUpdateType(update types.Update) types.UpdateType {
 	resolvedBucket := bucket.GetBucket()
 	file, _ := resolvedBucket.GetFile(update, "rollback")
