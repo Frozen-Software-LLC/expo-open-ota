@@ -160,6 +160,18 @@ func StringifyBranchMapping(branchMapping map[string]interface{}) string {
 }
 
 func mockWorkingExpoResponse(channelName string) {
+	mockWorkingExpoResponseForBranch(channelName, "branch-1")
+}
+
+func mockWorkingExpoResponseForBranch(channelName string, activeBranch string) {
+	branch1Logic := "false"
+	branch2Logic := "false"
+	if activeBranch == "branch-1" {
+		branch1Logic = "true"
+	}
+	if activeBranch == "branch-2" {
+		branch2Logic = "true"
+	}
 	httpmock.RegisterResponder("POST", "https://api.expo.dev/graphql",
 		func(req *http.Request) (*http.Response, error) {
 			isFetchSelfExpoUsername := req.Header.Get("operationName") == "FetchExpoUserAccountInformations"
@@ -217,11 +229,11 @@ func mockWorkingExpoResponse(channelName string) {
 							"data": []map[string]interface{}{
 								{
 									"branchId":           "branch-1-id",
-									"branchMappingLogic": "true",
+									"branchMappingLogic": branch1Logic,
 								},
 								{
 									"branchId":           "branch-2-id",
-									"branchMappingLogic": "false",
+									"branchMappingLogic": branch2Logic,
 								},
 							},
 						}),

@@ -13,11 +13,28 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+const revylExactStagingChannelPrefix = "revyl-ota-e2e-staging-"
+
+var canonicalUpdateUUIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+func parseRevylExactStagingChannel(channelName string) (string, string, error) {
+	if !strings.HasPrefix(channelName, revylExactStagingChannelPrefix) {
+		return channelName, "", nil
+	}
+	updateUUID := strings.TrimPrefix(channelName, revylExactStagingChannelPrefix)
+	if updateUUID == uuid.Nil.String() || !canonicalUpdateUUIDPattern.MatchString(updateUUID) {
+		return "", "", fmt.Errorf("invalid exact Revyl staging channel")
+	}
+	return "staging", updateUUID, nil
+}
 
 func createMultipartResponse(headers map[string][]string, jsonContent interface{}) (*multipart.Writer, *bytes.Buffer, error) {
 	start := time.Now()
@@ -207,10 +224,16 @@ func ManifestHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No channel name provided", http.StatusBadRequest)
 		return
 	}
+	mappedChannelName, exactUpdateUUID, err := parseRevylExactStagingChannel(channelName)
+	if err != nil {
+		log.Printf("[RequestID: %s] Invalid exact Revyl staging channel: %v", requestID, err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	log.Printf("[TRACE] [RequestID: %s] Calling FetchExpoChannelMapping at %s", requestID, time.Now().Format(time.RFC3339Nano))
 	branchMapStart := time.Now()
-	branchMap, err := services.FetchExpoChannelMapping(channelName)
+	branchMap, err := services.FetchExpoChannelMapping(mappedChannelName)
 	log.Printf("[TRACE] [RequestID: %s] FetchExpoChannelMapping completed in %v", requestID, time.Since(branchMapStart))
 	if err != nil {
 		log.Printf("[RequestID: %s] Error fetching channel mapping: %v", requestID, err)
@@ -218,7 +241,7 @@ func ManifestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if branchMap == nil {
-		log.Printf("[RequestID: %s] No branch mapping found for channel: %s", requestID, channelName)
+		log.Printf("[RequestID: %s] No branch mapping found for channel: %s", requestID, mappedChannelName)
 		http.Error(w, "No branch mapping found", http.StatusNotFound)
 		return
 	}
@@ -267,16 +290,26 @@ func ManifestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[TRACE] [RequestID: %s] Calling GetLatestUpdateBundlePathForRuntimeVersion at %s", requestID, time.Now().Format(time.RFC3339Nano))
+	log.Printf("[TRACE] [RequestID: %s] Selecting update at %s", requestID, time.Now().Format(time.RFC3339Nano))
 	latestUpdateStart := time.Now()
-	lastUpdate, err := update.GetLatestUpdateBundlePathForRuntimeVersion(branch, runtimeVersion, platform)
-	log.Printf("[TRACE] [RequestID: %s] GetLatestUpdateBundlePathForRuntimeVersion completed in %v", requestID, time.Since(latestUpdateStart))
+	var lastUpdate *types.Update
+	if exactUpdateUUID == "" {
+		lastUpdate, err = update.GetLatestUpdateBundlePathForRuntimeVersion(branch, runtimeVersion, platform)
+	} else {
+		lastUpdate, err = update.GetUpdateBundlePathForRuntimeVersionAndUUID(branch, runtimeVersion, platform, exactUpdateUUID)
+	}
+	log.Printf("[TRACE] [RequestID: %s] Update selection completed in %v", requestID, time.Since(latestUpdateStart))
 	if err != nil {
-		log.Printf("[RequestID: %s] Error getting latest update: %v", requestID, err)
-		http.Error(w, "Error getting latest update", http.StatusInternalServerError)
+		log.Printf("[RequestID: %s] Error selecting update: %v", requestID, err)
+		http.Error(w, "Error selecting update", http.StatusInternalServerError)
 		return
 	}
 	if lastUpdate == nil {
+		if exactUpdateUUID != "" {
+			log.Printf("[RequestID: %s] Exact update not found for runtimeVersion: %s in branch: %s", requestID, runtimeVersion, branch)
+			http.Error(w, "Exact update not found", http.StatusNotFound)
+			return
+		}
 		log.Printf("[RequestID: %s] No update found for runtimeVersion: %s in branch: %s", requestID, runtimeVersion, branch)
 		putNoUpdateAvailableInResponse(w, r, runtimeVersion, protocolVersion, requestID)
 		return
