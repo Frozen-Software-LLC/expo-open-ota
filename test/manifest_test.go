@@ -49,6 +49,72 @@ func TestNotValidChannelForManifest(t *testing.T) {
 	assert.Equal(t, "Error fetching channel mapping: GraphQL request failed with status: 500 message: \n", w.Body.String())
 }
 
+func TestExpiredPreviewChannelReturnsRollbackDirective(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "http://localhost:3000/manifest", nil)
+	r.Header.Add("expo-platform", "ios")
+	r.Header.Add("expo-runtime-version", "1")
+	r.Header.Add("expo-channel-name", "preview-pr-8530")
+	r.Header.Add("expo-protocol-version", "1")
+	r.Header.Add("expo-expect-signature", "true")
+	r.Header.Add("expo-embedded-update-id", "11111111-1111-1111-1111-111111111111")
+	r.Header.Add("expo-current-update-id", "22222222-2222-2222-2222-222222222222")
+	httpmock.RegisterResponder("POST", "https://api.expo.dev/graphql",
+		func(req *http.Request) (*http.Response, error) {
+			if req.Header.Get("operationName") == "FetchExpoChannelMapping" {
+				return MockExpoChannelMapping([]map[string]interface{}{}, map[string]interface{}{})
+			}
+			return nil, nil
+		})
+
+	handlers.ManifestHandler(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	parts, err := ParseMultipartMixedResponse(w.Header().Get("Content-Type"), w.Body.Bytes())
+	assert.NoError(t, err)
+	if assert.Len(t, parts, 1) {
+		assert.True(t, IsMultipartPartWithName(parts[0], "directive"))
+		var directive types.RollbackDirective
+		assert.NoError(t, json.Unmarshal([]byte(parts[0].Body), &directive))
+		assert.Equal(t, "rollBackToEmbedded", directive.Type)
+		assert.NotEmpty(t, directive.Parameters.CommitTime)
+	}
+}
+
+func TestExpiredPreviewAlreadyEmbeddedReturnsNoUpdate(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "http://localhost:3000/manifest", nil)
+	r.Header.Add("expo-platform", "ios")
+	r.Header.Add("expo-runtime-version", "1")
+	r.Header.Add("expo-channel-name", "preview-pr-8530")
+	r.Header.Add("expo-protocol-version", "1")
+	r.Header.Add("expo-expect-signature", "true")
+	r.Header.Add("expo-embedded-update-id", "11111111-1111-1111-1111-111111111111")
+	r.Header.Add("expo-current-update-id", "11111111-1111-1111-1111-111111111111")
+	httpmock.RegisterResponder("POST", "https://api.expo.dev/graphql",
+		func(req *http.Request) (*http.Response, error) {
+			if req.Header.Get("operationName") == "FetchExpoChannelMapping" {
+				return MockExpoChannelMapping([]map[string]interface{}{}, map[string]interface{}{})
+			}
+			return nil, nil
+		})
+
+	handlers.ManifestHandler(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	parts, err := ParseMultipartMixedResponse(w.Header().Get("Content-Type"), w.Body.Bytes())
+	assert.NoError(t, err)
+	if assert.Len(t, parts, 1) {
+		var directive types.NoUpdateAvailableDirective
+		assert.NoError(t, json.Unmarshal([]byte(parts[0].Body), &directive))
+		assert.Equal(t, "noUpdateAvailable", directive.Type)
+	}
+}
+
 func TestNotMappedChannelForManifest(t *testing.T) {
 	teardown := setup(t)
 	defer teardown()
