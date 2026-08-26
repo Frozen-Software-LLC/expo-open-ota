@@ -24,6 +24,7 @@ import (
 const revylExactStagingChannelPrefix = "revyl-ota-e2e-staging-"
 
 var canonicalUpdateUUIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var previewChannelPattern = regexp.MustCompile(`^preview-pr-[0-9]+$`)
 
 func parseRevylExactStagingChannel(channelName string) (string, string, error) {
 	if !strings.HasPrefix(channelName, revylExactStagingChannelPrefix) {
@@ -210,6 +211,29 @@ func putNoUpdateAvailableInResponse(w http.ResponseWriter, r *http.Request, runt
 	putResponse(w, r, directive, "directive", runtimeVersion, protocolVersion, requestID)
 }
 
+func putExpiredPreviewRollbackInResponse(w http.ResponseWriter, r *http.Request, runtimeVersion string, protocolVersion int64, requestID string) {
+	if protocolVersion == 0 {
+		http.Error(w, "Rollback not supported in protocol version 0", http.StatusBadRequest)
+		return
+	}
+	embeddedUpdateID := r.Header.Get("expo-embedded-update-id")
+	if embeddedUpdateID == "" {
+		http.Error(w, "No embedded update id provided", http.StatusBadRequest)
+		return
+	}
+	if r.Header.Get("expo-current-update-id") == embeddedUpdateID {
+		putNoUpdateAvailableInResponse(w, r, runtimeVersion, protocolVersion, requestID)
+		return
+	}
+	directive := types.RollbackDirective{
+		Type: "rollBackToEmbedded",
+		Parameters: types.RollbackDirectiveParameters{
+			CommitTime: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		},
+	}
+	putResponse(w, r, directive, "directive", runtimeVersion, protocolVersion, requestID)
+}
+
 func ManifestHandler(w http.ResponseWriter, r *http.Request) {
 	requestID := uuid.New().String()
 	handlerStart := time.Now()
@@ -242,6 +266,23 @@ func ManifestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if branchMap == nil {
 		log.Printf("[RequestID: %s] No branch mapping found for channel: %s", requestID, mappedChannelName)
+		if previewChannelPattern.MatchString(mappedChannelName) {
+			protocolVersion, parseErr := strconv.ParseInt(r.Header.Get("expo-protocol-version"), 10, 64)
+			if parseErr != nil {
+				http.Error(w, "Invalid protocol version", http.StatusBadRequest)
+				return
+			}
+			runtimeVersion := r.Header.Get("expo-runtime-version")
+			if runtimeVersion == "" {
+				runtimeVersion = r.URL.Query().Get("runtimeVersion")
+			}
+			if runtimeVersion == "" {
+				http.Error(w, "No runtime version provided", http.StatusBadRequest)
+				return
+			}
+			putExpiredPreviewRollbackInResponse(w, r, runtimeVersion, protocolVersion, requestID)
+			return
+		}
 		http.Error(w, "No branch mapping found", http.StatusNotFound)
 		return
 	}
