@@ -388,8 +388,15 @@ func FetchExpoChannelMapping(channelName string) (*ExpoChannelMapping, error) {
 	log.Printf("[TRACE] FetchExpoChannelMapping - GraphQL request completed in %v", time.Since(gqlStart))
 
 	log.Printf("[TRACE] FetchExpoChannelMapping - Parsing branch mapping at %s", time.Now().Format(time.RFC3339Nano))
+	channel := resp.Data.App.ById.UpdateChannelByName
+	// Expo returns an empty object when a channel was deleted. Treat that as a
+	// missing mapping instead of attempting to unmarshal an empty string and
+	// turning an expired preview into a manifest 500.
+	if channel.ID == "" || channel.BranchMapping == "" {
+		return nil, nil
+	}
 	var branchMapping BranchMapping
-	if err := json.Unmarshal([]byte(resp.Data.App.ById.UpdateChannelByName.BranchMapping), &branchMapping); err != nil {
+	if err := json.Unmarshal([]byte(channel.BranchMapping), &branchMapping); err != nil {
 		return nil, err
 	}
 
