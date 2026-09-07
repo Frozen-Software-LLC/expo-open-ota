@@ -164,7 +164,7 @@ func VerifyUploadedUpdate(update types.Update) error {
 }
 
 // Bound storage requests and check shared assets only once. Serial object reads
-// made finalization exceed the upstream response deadline for large exports.
+// can prolong finalization enough for callers to retry large exports.
 func verifyUploadedFiles(storage bucket.Bucket, update types.Update, files []string) error {
 	unique := make(map[string]struct{}, len(files))
 	for _, file := range files {
