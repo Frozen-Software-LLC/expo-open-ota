@@ -122,7 +122,7 @@ func performUpload(t *testing.T, projectRoot, branch, runtimeVersion, sampleUpda
 		}
 		sampleReq := fileUploadRequests[0]
 		expectedFilePath := filepath.Join(projectRoot, "updates", branch, runtimeVersion, updateId, sampleReq.FilePath)
-		if _, err := os.Open(expectedFilePath); err != nil {
+		if _, err := os.Stat(expectedFilePath); err != nil {
 			t.Fatalf("Error opening uploaded file %s: %v", expectedFilePath, err)
 		}
 	}

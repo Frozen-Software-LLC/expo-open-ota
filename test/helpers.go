@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -53,7 +54,7 @@ func GlobalAfterEach(t *testing.T) {
 		}
 		for _, update := range updates {
 			if update.IsDir() {
-				err = os.RemoveAll(filepath.Join(updatesPath, update.Name()))
+				err = removeTestUpdateDirectory(filepath.Join(updatesPath, update.Name()))
 				if err != nil {
 					t.Errorf("Error removing update directory: %v", err)
 				}
@@ -81,6 +82,19 @@ func GlobalAfterEach(t *testing.T) {
 		}
 	})
 
+}
+
+func removeTestUpdateDirectory(path string) error {
+	// Manifest prewarming runs in the background after publication. Windows
+	// cannot unlink files until those readers close their handles.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		err := os.RemoveAll(path)
+		if err == nil || runtime.GOOS != "windows" || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func findProjectRoot() (string, error) {

@@ -10,9 +10,11 @@ import (
 	"expo-open-ota/internal/types"
 	"expo-open-ota/internal/update"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"net/http"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,6 +25,10 @@ type FileNamesRequest struct {
 	FileNames []string `json:"fileNames"`
 	Message   string   `json:"message,omitempty"`
 }
+
+// Fixed stripes bound memory while serializing retries for the same upload.
+// The durable .check marker also handles retries after a process restart.
+var uploadFinalizationLocks [64]sync.Mutex
 
 func MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *http.Request) {
 	requestID := uuid.New().String()
@@ -76,17 +82,28 @@ func MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resolvedBucket := bucket.GetBucket()
+	// A response can be lost after the marker was committed. Retrying that
+	// exact update must succeed, even if a newer update has since been published.
+	checked, err := update.HasUpdateBeenChecked(*currentUpdate)
+	if err != nil {
+		log.Printf("[RequestID: %s] Error reading update completion: %v", requestID, err)
+		http.Error(w, "Error reading update completion", http.StatusServiceUnavailable)
+		return
+	}
+	key := fnv.New32a()
+	_, _ = key.Write([]byte(branchName + "/" + runtimeVersion + "/" + updateId))
+	lock := &uploadFinalizationLocks[key.Sum32()%uint32(len(uploadFinalizationLocks))]
+	lock.Lock()
+	defer lock.Unlock()
+	if checked {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	errorVerify := update.VerifyUploadedUpdate(*currentUpdate)
 	if errorVerify != nil {
-		// Delete folder and throw error
-		log.Printf("[RequestID: %s] Invalid update, deleting folder...", requestID)
-		err := resolvedBucket.DeleteUpdateFolder(branchName, runtimeVersion, updateId)
-		if err != nil {
-			log.Printf("[RequestID: %s] Error deleting update folder: %v", requestID, err)
-			http.Error(w, "Error deleting update folder", http.StatusInternalServerError)
-			return
-		}
-		log.Printf("[RequestID: %s] Invalid update, folder deleted", requestID)
+		// Keep the uncommitted upload so a storage failure or incomplete upload
+		// can be retried without destroying files already uploaded successfully.
+		log.Printf("[RequestID: %s] Update verification failed: %v", requestID, errorVerify)
 		http.Error(w, fmt.Sprintf("Invalid update %s", errorVerify), http.StatusBadRequest)
 		return
 	}
@@ -104,6 +121,11 @@ func MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Another in-flight finalization may have committed while verification ran.
+	if latestUpdate.UpdateId == currentUpdate.UpdateId {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	areUpdatesIdentical, err := update.AreUpdatesIdentical(*currentUpdate, *latestUpdate)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error comparing updates: %v", requestID, err)
