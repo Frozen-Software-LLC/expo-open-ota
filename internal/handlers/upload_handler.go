@@ -82,19 +82,20 @@ func MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resolvedBucket := bucket.GetBucket()
-	// A response can be lost after the marker was committed. Retrying that
-	// exact update must succeed, even if a newer update has since been published.
+	key := fnv.New32a()
+	_, _ = key.Write([]byte(branchName + "/" + runtimeVersion + "/" + updateId))
+	lock := &uploadFinalizationLocks[key.Sum32()%uint32(len(uploadFinalizationLocks))]
+	lock.Lock()
+	defer lock.Unlock()
+	// Read completion after acquiring the lock: another request may have
+	// committed while this one waited. A retry must also succeed when a newer
+	// update has since been published.
 	checked, err := update.HasUpdateBeenChecked(*currentUpdate)
 	if err != nil {
 		log.Printf("[RequestID: %s] Error reading update completion: %v", requestID, err)
 		http.Error(w, "Error reading update completion", http.StatusServiceUnavailable)
 		return
 	}
-	key := fnv.New32a()
-	_, _ = key.Write([]byte(branchName + "/" + runtimeVersion + "/" + updateId))
-	lock := &uploadFinalizationLocks[key.Sum32()%uint32(len(uploadFinalizationLocks))]
-	lock.Lock()
-	defer lock.Unlock()
 	if checked {
 		w.WriteHeader(http.StatusOK)
 		return
