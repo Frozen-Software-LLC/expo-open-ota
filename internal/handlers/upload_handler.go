@@ -101,9 +101,12 @@ func MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	errorVerify := update.VerifyUploadedUpdate(*currentUpdate)
 	if errorVerify != nil {
-		// Keep the uncommitted upload so a storage failure or incomplete upload
-		// can be retried without destroying files already uploaded successfully.
-		log.Printf("[RequestID: %s] Update verification failed: %v", requestID, errorVerify)
+		log.Printf("[RequestID: %s] Invalid update, deleting folder: %v", requestID, errorVerify)
+		if err := resolvedBucket.DeleteUpdateFolder(branchName, runtimeVersion, updateId); err != nil {
+			log.Printf("[RequestID: %s] Error deleting update folder: %v", requestID, err)
+			http.Error(w, "Error deleting update folder", http.StatusInternalServerError)
+			return
+		}
 		http.Error(w, fmt.Sprintf("Invalid update %s", errorVerify), http.StatusBadRequest)
 		return
 	}

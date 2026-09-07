@@ -9,7 +9,7 @@ Distinct uploads with identical contents retain the existing 406 behavior.
 
 Verification checks each unique file once, using at most eight storage requests
 at a time. Missing files and storage failures both prevent finalization. A
-verification failure preserves the uncommitted upload for a later retry.
+verification failure retains the existing cleanup of the uncommitted upload.
 Writing the `.check` marker must succeed before the API returns success.
 
 This addresses the September 7 incident in DealSeek run 34137402370. Railway
