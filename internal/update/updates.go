@@ -96,21 +96,30 @@ func MarkUpdateAsChecked(update types.Update) error {
 		return err
 	}
 	reader := strings.NewReader(".check")
-	_ = resolvedBucket.UploadFileIntoUpdate(update, ".check", reader)
+	if err := resolvedBucket.UploadFileIntoUpdate(update, ".check", reader); err != nil {
+		return err
+	}
 	go PreWarmManifestCache(update.Branch, update.RuntimeVersion, "ios")
 	go PreWarmManifestCache(update.Branch, update.RuntimeVersion, "android")
 	return nil
 }
 
-func IsUpdateValid(Update types.Update) bool {
+func HasUpdateBeenChecked(update types.Update) (bool, error) {
 	resolvedBucket := bucket.GetBucket()
-	// Search for .check file in the update
-	file, _ := resolvedBucket.GetFile(Update, ".check")
+	file, err := resolvedBucket.GetFile(update, ".check")
+	if err != nil {
+		return false, err
+	}
 	if file != nil {
 		file.Reader.Close()
-		return true
+		return true, nil
 	}
-	return false
+	return false, nil
+}
+
+func IsUpdateValid(update types.Update) bool {
+	checked, _ := HasUpdateBeenChecked(update)
+	return checked
 }
 
 func ComputeLastUpdateCacheKey(branch string, runtimeVersion string, platform string) string {
@@ -151,17 +160,42 @@ func VerifyUploadedUpdate(update types.Update) error {
 		}
 	}
 
-	resolvedBucket := bucket.GetBucket()
+	return verifyUploadedFiles(bucket.GetBucket(), update, files)
+}
+
+// Bound storage requests and check shared assets only once. Serial object reads
+// can prolong finalization enough for callers to retry large exports.
+func verifyUploadedFiles(storage bucket.Bucket, update types.Update, files []string) error {
+	unique := make(map[string]struct{}, len(files))
 	for _, file := range files {
-		f, err := resolvedBucket.GetFile(update, file)
-		if err != nil {
-			return fmt.Errorf("missing file: %s in update", file)
-		}
-		if f != nil {
-			f.Reader.Close()
-		}
+		unique[file] = struct{}{}
 	}
-	return nil
+	jobs := make(chan string, len(unique))
+	for file := range unique {
+		jobs <- file
+	}
+	close(jobs)
+	errors := make(chan error, len(unique))
+	var workers sync.WaitGroup
+	for i := 0; i < min(8, len(unique)); i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for file := range jobs {
+				f, err := storage.GetFile(update, file)
+				if err != nil {
+					errors <- fmt.Errorf("checking file %s: %w", file, err)
+				} else if f == nil {
+					errors <- fmt.Errorf("missing file: %s in update", file)
+				} else {
+					f.Reader.Close()
+				}
+			}
+		}()
+	}
+	workers.Wait()
+	close(errors)
+	return <-errors
 }
 
 func GetUpdate(branch string, runtimeVersion string, updateId string) (*types.Update, error) {
