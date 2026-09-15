@@ -29,3 +29,10 @@ func ComputeGetUpdatesCacheKey(branch string, runtimeVersion string) string {
 func ComputeGetUpdateDetailsCacheKey(branch string, runtimeVersion string, updateID string) string {
 	return fmt.Sprintf("dashboard:%s:request:getUpdateDetails:%s:%s:%s", version.Version, branch, runtimeVersion, updateID)
 }
+
+// One dashboard row per update. Immutable once the update is valid (its .check
+// marker is written after the stored metadata), so it can live for a long time
+// and turn the per-update storage reads into a single cache hit.
+func ComputeUpdateItemCacheKey(branch string, runtimeVersion string, updateID string) string {
+	return fmt.Sprintf("dashboard:%s:item:%s:%s:%s", version.Version, branch, runtimeVersion, updateID)
+}

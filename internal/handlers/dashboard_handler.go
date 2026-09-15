@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -292,77 +293,157 @@ func GetUpdateDetails(w http.ResponseWriter, r *http.Request) {
 	cache.Set(cacheKey, string(marshaledResponse), &ttlMs)
 }
 
+// Building a row costs up to four storage reads (.check, update-metadata.json,
+// rollback, metadata.json). Runtimes with hundreds of updates took 30-90s
+// serially, so rows are built concurrently and cached individually; the full
+// list is cached too (publish invalidates it via MarkUpdateAsChecked).
+const (
+	dashboardUpdateItemWorkers         = 16
+	dashboardUpdateItemTTLSeconds      = 7 * 24 * 60 * 60
+	dashboardUpdatesResponseTTLSeconds = 60 * 60
+	dashboardUpdatesMaxLimit           = 1000
+)
+
+func buildUpdateItem(update types.Update, cache cache2.Cache) (UpdateItem, bool) {
+	itemKey := dashboard.ComputeUpdateItemCacheKey(update.Branch, update.RuntimeVersion, update.UpdateId)
+	if cached := cache.Get(itemKey); cached != "" {
+		var item UpdateItem
+		if err := json.Unmarshal([]byte(cached), &item); err == nil {
+			return item, true
+		}
+	}
+	if !update2.IsUpdateValid(update) {
+		return UpdateItem{}, false
+	}
+	numberUpdate, _ := strconv.ParseInt(update.UpdateId, 10, 64)
+	storedMetadata, _ := update2.RetrieveUpdateStoredMetadata(update)
+	if storedMetadata == nil {
+		storedMetadata = &types.UpdateStoredMetadata{}
+	}
+	item := UpdateItem{
+		UpdateId:   update.UpdateId,
+		CreatedAt:  time.UnixMilli(numberUpdate).UTC().Format(time.RFC3339),
+		CommitHash: storedMetadata.CommitHash,
+		Platform:   storedMetadata.Platform,
+		Message:    storedMetadata.Message,
+	}
+	if update2.GetUpdateType(update) == types.Rollback {
+		item.UpdateUUID = "Rollback to embedded"
+	} else {
+		metadata, err := update2.GetMetadata(update)
+		if err != nil {
+			return UpdateItem{}, false
+		}
+		item.UpdateUUID = storedMetadata.UpdateUUID
+		if item.UpdateUUID == "" {
+			item.UpdateUUID = crypto.ConvertSHA256HashToUUID(metadata.ID)
+		}
+	}
+	if encoded, err := json.Marshal(item); err == nil {
+		ttl := dashboardUpdateItemTTLSeconds
+		_ = cache.Set(itemKey, string(encoded), &ttl)
+	}
+	return item, true
+}
+
+func buildUpdateItems(updates []types.Update, cache cache2.Cache) []UpdateItem {
+	built := make([]*UpdateItem, len(updates))
+	sem := make(chan struct{}, dashboardUpdateItemWorkers)
+	var wg sync.WaitGroup
+	for i, update := range updates {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, update types.Update) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if item, ok := buildUpdateItem(update, cache); ok {
+				built[i] = &item
+			}
+		}(i, update)
+	}
+	wg.Wait()
+	items := make([]UpdateItem, 0, len(updates))
+	for _, item := range built {
+		if item != nil {
+			items = append(items, *item)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		timeI, _ := time.Parse(time.RFC3339, items[i].CreatedAt)
+		timeJ, _ := time.Parse(time.RFC3339, items[j].CreatedAt)
+		return timeI.After(timeJ)
+	})
+	return items
+}
+
+// Optional ?limit=&offset= (newest first). Absent or invalid → the full list,
+// which keeps existing clients unchanged. X-Total-Count always carries the
+// unpaginated size so a client can page without a second request.
+func parseUpdatesPage(r *http.Request) (limit int, offset int) {
+	query := r.URL.Query()
+	if raw := query.Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+			if limit > dashboardUpdatesMaxLimit {
+				limit = dashboardUpdatesMaxLimit
+			}
+		}
+	}
+	if raw := query.Get("offset"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			offset = parsed
+		}
+	}
+	return limit, offset
+}
+
+func pageUpdates(items []UpdateItem, limit int, offset int) []UpdateItem {
+	if offset >= len(items) {
+		return []UpdateItem{}
+	}
+	end := len(items)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return items[offset:end]
+}
+
 func GetUpdatesHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	branchName := vars["BRANCH"]
 	runtimeVersion := vars["RUNTIME_VERSION"]
+	limit, offset := parseUpdatesPage(r)
 	cacheKey := dashboard.ComputeGetUpdatesCacheKey(branchName, runtimeVersion)
 	cache := cache2.GetCache()
-	if cacheValue := cache.Get(cacheKey); cacheValue != "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		var updatesResponse []UpdateItem
-		json.Unmarshal([]byte(cacheValue), &updatesResponse)
-		json.NewEncoder(w).Encode(updatesResponse)
-		return
-	}
-	resolvedBucket := bucket.GetBucket()
-	updates, err := resolvedBucket.GetUpdates(branchName, runtimeVersion)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
 
 	var updatesResponse []UpdateItem
-	for _, update := range updates {
-		isValid := update2.IsUpdateValid(update)
-		if !isValid {
-			continue
-		}
-		numberUpdate, _ := strconv.ParseInt(update.UpdateId, 10, 64)
-		storedMetadata, _ := update2.RetrieveUpdateStoredMetadata(update)
-		updateType := update2.GetUpdateType(update)
-		if updateType == types.Rollback {
-			updatesResponse = append(updatesResponse, UpdateItem{
-				UpdateUUID: "Rollback to embedded",
-				UpdateId:   update.UpdateId,
-				CreatedAt:  time.UnixMilli(numberUpdate).UTC().Format(time.RFC3339),
-				CommitHash: storedMetadata.CommitHash,
-				Platform:   storedMetadata.Platform,
-				Message:    storedMetadata.Message,
-			})
-			continue
-		}
-
-		metadata, err := update2.GetMetadata(update)
+	if cacheValue := cache.Get(cacheKey); cacheValue != "" {
+		json.Unmarshal([]byte(cacheValue), &updatesResponse)
+	} else {
+		resolvedBucket := bucket.GetBucket()
+		updates, err := resolvedBucket.GetUpdates(branchName, runtimeVersion)
 		if err != nil {
-			continue
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
-		updateUUID := storedMetadata.UpdateUUID
-		if updateUUID == "" {
-			updateUUID = crypto.ConvertSHA256HashToUUID(metadata.ID)
+		updatesResponse = buildUpdateItems(updates, cache)
+		if marshaledResponse, err := json.Marshal(updatesResponse); err == nil {
+			ttl := dashboardUpdatesResponseTTLSeconds
+			cache.Set(cacheKey, string(marshaledResponse), &ttl)
 		}
-		updatesResponse = append(updatesResponse, UpdateItem{
-			UpdateUUID: updateUUID,
-			UpdateId:   update.UpdateId,
-			CreatedAt:  time.UnixMilli(numberUpdate).UTC().Format(time.RFC3339),
-			CommitHash: storedMetadata.CommitHash,
-			Platform:   storedMetadata.Platform,
-			Message:    storedMetadata.Message,
-		})
 	}
+	if updatesResponse == nil {
+		updatesResponse = []UpdateItem{}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Total-Count", strconv.Itoa(len(updatesResponse)))
 	w.WriteHeader(http.StatusOK)
-	sort.Slice(updatesResponse, func(i, j int) bool {
-		timeI, _ := time.Parse(time.RFC3339, updatesResponse[i].CreatedAt)
-		timeJ, _ := time.Parse(time.RFC3339, updatesResponse[j].CreatedAt)
-		return timeI.After(timeJ)
-	})
+	if limit > 0 || offset > 0 {
+		json.NewEncoder(w).Encode(pageUpdates(updatesResponse, limit, offset))
+		return
+	}
 	json.NewEncoder(w).Encode(updatesResponse)
-	marshaledResponse, _ := json.Marshal(updatesResponse)
-	ttl := 10 * time.Second
-	ttlMs := int(ttl.Milliseconds())
-	cache.Set(cacheKey, string(marshaledResponse), &ttlMs)
 }
 
 func UpdateChannelBranchMappingHandler(w http.ResponseWriter, r *http.Request) {

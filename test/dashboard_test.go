@@ -245,6 +245,44 @@ func TestUpdatesMultiBranch2(t *testing.T) {
 	assert.Equal(t, "[{\"updateUUID\":\"68e096e2-a619-9d56-7f7c-89f97bc27312\",\"updateId\":\"1737455526\",\"createdAt\":\"1970-01-21T02:37:35Z\",\"commitHash\":\"\",\"platform\":\"ios\"},{\"updateUUID\":\"fdc14544-9e15-732f-cd9c-e3e26c55cbea\",\"updateId\":\"1674170951\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"commitHash\":\"\",\"platform\":\"android\"},{\"updateUUID\":\"d100f19f-e0be-45c4-212a-27d1f067552b\",\"updateId\":\"1666629107\",\"createdAt\":\"1970-01-20T06:57:09Z\",\"commitHash\":\"1674170951\",\"platform\":\"android\"},{\"updateUUID\":\"Rollback to embedded\",\"updateId\":\"1666629141\",\"createdAt\":\"1970-01-20T06:57:09Z\",\"commitHash\":\"1674170951\",\"platform\":\"ios\"},{\"updateUUID\":\"Rollback to embedded\",\"updateId\":\"1666304169\",\"createdAt\":\"1970-01-20T06:51:44Z\",\"commitHash\":\"1674170951\",\"platform\":\"ios\"}]", strings.TrimSpace(string(respRec.Body.Bytes())))
 }
 
+func TestUpdatesPaginationBranch2(t *testing.T) {
+	teardown := setup(t)
+	defer teardown()
+	router := infrastructure.NewRouter()
+	httpmock.RegisterResponder("POST", "https://api.expo.dev/graphql",
+		func(req *http.Request) (*http.Response, error) {
+			return MockExpoBranchesMappingResponse([]map[string]interface{}{{"id": "branch-1", "name": "branch-1"}, {"id": "branch-2", "name": "branch-2"}}, []map[string]interface{}{{"id": "staging", "name": "staging", "branchMapping": "{\"data\":[{\"branchId\":\"branch-1\",\"branchMappingLogic\":\"true\"}],\"version\":0}"}})
+		})
+	token := login().Token
+
+	respRec := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/branch/branch-2/runtimeVersion/1/updates?limit=2&offset=1", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(respRec, req)
+	assert.Equal(t, http.StatusOK, respRec.Code)
+	assert.Equal(t, "5", respRec.Header().Get("X-Total-Count"))
+	assert.Equal(t, "[{\"updateUUID\":\"fdc14544-9e15-732f-cd9c-e3e26c55cbea\",\"updateId\":\"1674170951\",\"createdAt\":\"1970-01-20T09:02:50Z\",\"commitHash\":\"\",\"platform\":\"android\"},{\"updateUUID\":\"d100f19f-e0be-45c4-212a-27d1f067552b\",\"updateId\":\"1666629107\",\"createdAt\":\"1970-01-20T06:57:09Z\",\"commitHash\":\"1674170951\",\"platform\":\"android\"}]", strings.TrimSpace(string(respRec.Body.Bytes())))
+
+	// Past the end → empty page, total still reported.
+	respRec = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/api/branch/branch-2/runtimeVersion/1/updates?limit=2&offset=10", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(respRec, req)
+	assert.Equal(t, http.StatusOK, respRec.Code)
+	assert.Equal(t, "5", respRec.Header().Get("X-Total-Count"))
+	assert.Equal(t, "[]", strings.TrimSpace(string(respRec.Body.Bytes())))
+
+	// Invalid paging params fall back to the full list (unchanged contract).
+	respRec = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/api/branch/branch-2/runtimeVersion/1/updates?limit=abc&offset=-3", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(respRec, req)
+	assert.Equal(t, http.StatusOK, respRec.Code)
+	var full []map[string]interface{}
+	assert.NoError(t, json.Unmarshal(respRec.Body.Bytes(), &full))
+	assert.Len(t, full, 5)
+}
+
 func TestUpdatesSomeNotValidBranch4(t *testing.T) {
 	teardown := setup(t)
 	defer teardown()
