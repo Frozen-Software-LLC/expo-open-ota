@@ -2,15 +2,19 @@ package assets
 
 import (
 	"expo-open-ota/internal/bucket"
+	"expo-open-ota/internal/cache"
 	"expo-open-ota/internal/cdn"
 	"expo-open-ota/internal/types"
 	"expo-open-ota/internal/update"
+	"fmt"
 	"log"
 	"mime"
 	"net/http"
+	"strings"
 )
 
 type AssetsRequest struct {
+	UpdateID       string
 	Branch         string
 	AssetName      string
 	RuntimeVersion string
@@ -24,6 +28,38 @@ type AssetsResponse struct {
 	Body        []byte
 	ContentType string
 	URL         string
+}
+
+// ResolveUpdate pins new manifest asset URLs to the selected release, so a
+// promotion during download cannot substitute a newer full bundle or patch.
+func ResolveUpdate(req AssetsRequest) (*types.Update, error) {
+	if req.UpdateID == "" {
+		return update.GetLatestUpdateBundlePathForRuntimeVersion(req.Branch, req.RuntimeVersion, req.Platform)
+	}
+	if req.Branch == "" || strings.ContainsAny(req.Branch, "/\\") || req.RuntimeVersion == "" || strings.ContainsAny(req.RuntimeVersion, "/\\") || req.Branch == "." || req.RuntimeVersion == "." || req.Branch == ".." || req.RuntimeVersion == ".." {
+		return nil, fmt.Errorf("invalid update path")
+	}
+	target, err := update.GetUpdate(req.Branch, req.RuntimeVersion, req.UpdateID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid target update")
+	}
+	// A manifest may reference many assets. Avoid re-reading validation objects
+	// from storage for every file while keeping removal checks short-lived.
+	key := fmt.Sprintf("pinnedAssetUpdate:v1:%s:%s:%s:%s", req.Branch, req.RuntimeVersion, req.Platform, req.UpdateID)
+	resolvedCache := cache.GetCache()
+	if resolvedCache.Get(key) == "valid" {
+		return target, nil
+	}
+	if !update.IsUpdateValid(*target) || update.GetUpdateType(*target) != types.NormalUpdate {
+		return nil, fmt.Errorf("invalid target update")
+	}
+	metadata, err := update.RetrieveUpdateStoredMetadata(*target)
+	if err != nil || metadata == nil || metadata.Platform != req.Platform {
+		return nil, fmt.Errorf("target platform mismatch")
+	}
+	ttl := 60
+	_ = resolvedCache.Set(key, "valid", &ttl)
+	return target, nil
 }
 
 func getAssetMetadata(req AssetsRequest, returnAsset bool) (AssetsResponse, *types.BucketFile, string, error) {
@@ -44,7 +80,7 @@ func getAssetMetadata(req AssetsRequest, returnAsset bool) (AssetsResponse, *typ
 		return AssetsResponse{StatusCode: http.StatusBadRequest, Body: []byte("No runtime version provided")}, nil, "", nil
 	}
 
-	lastUpdate, err := update.GetLatestUpdateBundlePathForRuntimeVersion(req.Branch, req.RuntimeVersion, req.Platform)
+	lastUpdate, err := ResolveUpdate(req)
 	if err != nil || lastUpdate == nil {
 		log.Printf("[RequestID: %s] No update found for runtimeVersion: %s", requestID, req.RuntimeVersion)
 		return AssetsResponse{StatusCode: http.StatusNotFound, Body: []byte("No update found")}, nil, "", nil
@@ -55,7 +91,7 @@ func getAssetMetadata(req AssetsRequest, returnAsset bool) (AssetsResponse, *typ
 			"expo-protocol-version": "1",
 			"expo-sfv-version":      "0",
 			"Cache-Control":         "public, max-age=31536000",
-			"Vary":                  "Accept-Encoding",
+			"Vary":                  "Accept-Encoding, A-IM, Expo-Current-Update-ID, Expo-Requested-Update-ID",
 		}
 		return AssetsResponse{
 			StatusCode: http.StatusOK,
@@ -107,7 +143,7 @@ func getAssetMetadata(req AssetsRequest, returnAsset bool) (AssetsResponse, *typ
 		"expo-protocol-version": "1",
 		"expo-sfv-version":      "0",
 		"Cache-Control":         "public, max-age=31536000",
-			"Vary":                  "Accept-Encoding",
+		"Vary":                  "Accept-Encoding, A-IM, Expo-Current-Update-ID, Expo-Requested-Update-ID",
 		"Content-Type":          contentType,
 	}
 

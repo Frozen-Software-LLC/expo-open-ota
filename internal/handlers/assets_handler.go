@@ -38,12 +38,19 @@ func AssetsHandler(w http.ResponseWriter, r *http.Request) {
 
 	req := assets.AssetsRequest{
 		Branch:         branchName,
+		UpdateID:       r.URL.Query().Get("updateId"),
 		AssetName:      r.URL.Query().Get("asset"),
 		RuntimeVersion: r.URL.Query().Get("runtimeVersion"),
 		Platform:       r.URL.Query().Get("platform"),
 		RequestID:      requestID,
 	}
 
+	// Negotiate patches before redirecting to a CDN that only stores full assets.
+	if tryServeBundlePatch(w, r, req) {
+		return
+	}
+	w.Header().Set("Vary", "Accept-Encoding, A-IM, Expo-Current-Update-ID, Expo-Requested-Update-ID")
+	w.Header().Set("Cache-Control", "private, no-store")
 	cdn := cdn2.GetCDN()
 	if cdn == nil || preventCDNRedirection {
 		resp, err := assets.HandleAssetsWithFile(req)
