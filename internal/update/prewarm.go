@@ -2,7 +2,17 @@ package update
 
 import (
 	"log"
+	"sync"
 )
+
+// Track asynchronous work so local integration tests can finish storage work
+// before tearing down their bucket fixtures.
+var preWarmTasks sync.WaitGroup
+
+func queueManifestPreWarm(branch, runtime, platform string) {
+	preWarmTasks.Add(1)
+	go func() { defer preWarmTasks.Done(); PreWarmManifestCache(branch, runtime, platform) }()
+}
 
 // PreWarmManifestCache populates the manifest cache layers for the given
 // branch/runtimeVersion/platform combination. It is intended to be called
