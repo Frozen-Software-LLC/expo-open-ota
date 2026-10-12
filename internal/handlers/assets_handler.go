@@ -45,11 +45,21 @@ func AssetsHandler(w http.ResponseWriter, r *http.Request) {
 		RequestID:      requestID,
 	}
 
+	// Count only the exact launch asset, never image/font traffic.
+	if isLaunchAsset(req) {
+		observation := &bundleResponse{ResponseWriter: w}
+		w = observation
+		defer observation.observe(r, req)
+	}
 	// Negotiate patches before redirecting to a CDN that only stores full assets.
-	if tryServeBundlePatch(w, r, req) {
+	served, reason := tryServeBundlePatch(w, r, req)
+	if observation, ok := w.(*bundleResponse); ok {
+		observation.reason = reason
+	}
+	if served {
 		return
 	}
-	w.Header().Set("Vary", "Accept-Encoding, A-IM, Expo-Current-Update-ID, Expo-Requested-Update-ID")
+	w.Header().Set("Vary", "Accept-Encoding, A-IM, Expo-Current-Update-ID, Expo-Requested-Update-ID, EAS-Client-ID")
 	w.Header().Set("Cache-Control", "private, no-store")
 	cdn := cdn2.GetCDN()
 	if cdn == nil || preventCDNRedirection {
@@ -62,6 +72,9 @@ func AssetsHandler(w http.ResponseWriter, r *http.Request) {
 		for key, value := range resp.Headers {
 			w.Header().Set(key, value)
 		}
+		// Full responses are also negotiated per installation/base.
+		w.Header().Set("Cache-Control", "private, no-store")
+		w.Header().Set("Vary", "Accept-Encoding, A-IM, Expo-Current-Update-ID, Expo-Requested-Update-ID, EAS-Client-ID")
 		if resp.StatusCode != 200 {
 			http.Error(w, string(resp.Body), resp.StatusCode)
 			return

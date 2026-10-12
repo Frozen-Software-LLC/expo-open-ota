@@ -22,8 +22,9 @@ type RedisCache struct {
 
 func NewRedisCache(host, password, port string, useTLS bool, username, caCertB64 string) *RedisCache {
 	opts := &redis.Options{
-		Addr:     host + ":" + port,
-		Password: password,
+		Addr:                  host + ":" + port,
+		Password:              password,
+		ContextTimeoutEnabled: true,
 	}
 
 	// Configure ACL username if provided
@@ -145,4 +146,14 @@ func (c *RedisCache) Scard(key string) (int64, error) {
 	defer cancel()
 
 	return c.client.SCard(ctx, withPrefix(key)).Result()
+}
+
+// Context-bound operations for optional telemetry that must not inherit the
+// general cache's two-second deadline on the bundle delivery path.
+func (c *RedisCache) SetWithContext(ctx context.Context, key, value string, ttl time.Duration) error {
+	return c.client.Set(ctx, withPrefix(key), value, ttl).Err()
+}
+func (c *RedisCache) GetWithContext(ctx context.Context, key string) string {
+	value, _ := c.client.Get(ctx, withPrefix(key)).Result()
+	return value
 }

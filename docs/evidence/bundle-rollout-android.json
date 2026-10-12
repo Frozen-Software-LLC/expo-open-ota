@@ -1,0 +1,65 @@
+{
+  "environment": "Android API 36 release-mode app, isolated loopback OTA server; no artificial network delays",
+  "appCommit": "7ee9f83188f19316b5993c92b77b078478237a16",
+  "installationIdHandling": "Real Expo EAS installation UUID retained while clearing OTA baseline between cases; no production settings changed",
+  "cases": [
+    {
+      "case": "unlisted",
+      "statuses": [
+        200
+      ],
+      "bundleBytes": [
+        9640035
+      ],
+      "expectedMetric": "device_not_allowed",
+      "exactTargetHash": true,
+      "successfulLaunches": 1,
+      "failedLaunches": 0,
+      "passed": true,
+      "metrics": [
+        "ota_bundle_response_bytes_total{delivery=\"full\",platform=\"android\",reason=\"device_not_allowed\"} 9.640035e+06",
+        "ota_bundle_responses_total{delivery=\"full\",platform=\"android\",reason=\"device_not_allowed\"} 1"
+      ]
+    },
+    {
+      "case": "allowed",
+      "statuses": [
+        226
+      ],
+      "bundleBytes": [
+        3636850
+      ],
+      "expectedMetric": "available",
+      "exactTargetHash": true,
+      "successfulLaunches": 1,
+      "failedLaunches": 0,
+      "passed": true,
+      "metrics": [
+        "ota_bundle_response_bytes_total{delivery=\"patch\",platform=\"android\",reason=\"available\"} 3.63685e+06",
+        "ota_bundle_responses_total{delivery=\"patch\",platform=\"android\",reason=\"available\"} 1"
+      ]
+    },
+    {
+      "case": "corrupt",
+      "statuses": [
+        226,
+        200
+      ],
+      "bundleBytes": [
+        3636850,
+        9640035
+      ],
+      "expectedMetric": "full_after_patch",
+      "exactTargetHash": true,
+      "successfulLaunches": 1,
+      "failedLaunches": 0,
+      "passed": true,
+      "metrics": [
+        "ota_bundle_response_bytes_total{delivery=\"full\",platform=\"android\",reason=\"full_after_patch\"} 9.640035e+06",
+        "ota_bundle_response_bytes_total{delivery=\"patch\",platform=\"android\",reason=\"available\"} 3.63685e+06",
+        "ota_bundle_responses_total{delivery=\"full\",platform=\"android\",reason=\"full_after_patch\"} 1",
+        "ota_bundle_responses_total{delivery=\"patch\",platform=\"android\",reason=\"available\"} 1"
+      ]
+    }
+  ]
+}

@@ -46,6 +46,7 @@ var (
 )
 
 func InitMetrics() {
+	prometheus.MustRegister(bundleResponses, bundleResponseBytes)
 	prometheus.MustRegister(activeUsersVec)
 	prometheus.MustRegister(updateDownloadsVec)
 	prometheus.MustRegister(updateErrorUsersVec)
@@ -53,6 +54,8 @@ func InitMetrics() {
 }
 
 func CleanupMetrics() {
+	prometheus.Unregister(bundleResponses)
+	prometheus.Unregister(bundleResponseBytes)
 	prometheus.Unregister(activeUsersVec)
 	prometheus.Unregister(updateDownloadsVec)
 	prometheus.Unregister(updateErrorUsersVec)
@@ -64,7 +67,7 @@ func TrackUpdateErrorUsers(clientId, platform, runtime, branch, update string) {
 	if computedUpdate == "" {
 		computedUpdate = "unknown"
 	}
-	if clientId == "" || platform == "" || runtime == "" || branch == ""  {
+	if clientId == "" || platform == "" || runtime == "" || branch == "" {
 		return
 	}
 	resolvedCache := cache.GetCache()
@@ -124,6 +127,7 @@ func PrometheusHandler() http.Handler {
 }
 
 func ResetMetricsForTest() {
+	bundleResponses, bundleResponseBytes = newBundleMetrics()
 	activeUsersVec = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "active_users_total",

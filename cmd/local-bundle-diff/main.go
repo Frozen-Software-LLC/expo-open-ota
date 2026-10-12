@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"expo-open-ota/internal/handlers"
+	"expo-open-ota/internal/metrics"
 	"expo-open-ota/internal/update"
 	"flag"
 	"fmt"
@@ -18,9 +19,10 @@ import (
 )
 
 type state struct {
-	Target string `json:"target"`
-	Reload bool   `json:"reloadEnabled"`
-	Mode   string `json:"mode"`
+	Target         string `json:"target"`
+	Reload         bool   `json:"reloadEnabled"`
+	Mode           string `json:"mode"`
+	BytesPerSecond int    `json:"bytesPerSecond"`
 }
 
 func main() {
@@ -48,7 +50,9 @@ func main() {
 		}
 		log.Printf("Local fixture finalized: %s", *finalize)
 	}
+	metrics.InitMetrics()
 	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.PrometheusHandler())
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		raw, err := os.ReadFile(filepath.Join(*root, "state.json"))
 		var s state
@@ -74,8 +78,35 @@ func main() {
 				w.Header()[k] = v
 			}
 			w.WriteHeader(rec.Code)
-			n, _ := w.Write(rec.Body.Bytes())
-			event := map[string]any{"event": "asset", "status": rec.Code, "bytes": n, "ms": float64(time.Since(start).Microseconds()) / 1000, "asset": r.URL.Query().Get("asset"), "base": r.Header.Get("Expo-Current-Update-ID"), "target": r.Header.Get("Expo-Requested-Update-ID"), "patchRequested": r.Header.Get("A-IM"), "encoding": rec.Header().Get("Content-Encoding")}
+			n := 0
+			body := rec.Body.Bytes()
+			if s.BytesPerSecond > 0 && strings.HasSuffix(r.URL.Query().Get("asset"), ".hbc") {
+				chunk := s.BytesPerSecond / 10
+				if chunk < 1 {
+					chunk = 1
+				}
+				for len(body) > 0 {
+					end := chunk
+					if end > len(body) {
+						end = len(body)
+					}
+					written, err := w.Write(body[:end])
+					n += written
+					if err != nil {
+						break
+					}
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+					body = body[end:]
+					if len(body) > 0 {
+						time.Sleep(100 * time.Millisecond)
+					}
+				}
+			} else {
+				n, _ = w.Write(body)
+			}
+			event := map[string]any{"event": "asset", "status": rec.Code, "bytes": n, "ms": float64(time.Since(start).Microseconds()) / 1000, "asset": r.URL.Query().Get("asset"), "base": r.Header.Get("Expo-Current-Update-ID"), "target": r.Header.Get("Expo-Requested-Update-ID"), "patchRequested": r.Header.Get("A-IM"), "encoding": rec.Header().Get("Content-Encoding"), "clientId": r.Header.Get("EAS-Client-ID")}
 			data, _ := json.Marshal(event)
 			fmt.Println(string(data))
 			return
@@ -83,6 +114,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
 		if r.URL.Path == "/manifest" {
+			log.Printf("manifest platform=%s current=%s target=%s", r.Header.Get("expo-platform"), r.Header.Get("expo-current-update-id"), s.Target)
 			w.Header().Set("expo-protocol-version", "1")
 			w.Header().Set("expo-sfv-version", "0")
 			if s.Target == "" {

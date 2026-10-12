@@ -158,15 +158,17 @@ deferred. Cold-start application was verified after declining tracking.
 
 Evidence is saved in the developer's `Downloads/DEV-9212-evidence/`, including
 requests, native logs, comparison JSON, screenshots, fixture preparation, and
-local runners. Android protocol branches are tested in Go; Android device E2E,
-physical devices, and real-network benchmarks remain pending.
+local runners. Android device E2E subsequently passed with the merged app PR, including the
+three-second budget and native fallback. Physical devices and production network
+benchmarks remain pending.
 
 ## Before production rollout
 
 - Capture and retain exact embedded bundles from dashboard-started native builds
   for fresh-install patches; the current proof supplied them locally.
 - Review the three-base retention policy and provision worker memory headroom.
-- Complete Android E2E, CDN/cache behavior, storage latency, and slow-network tests.
+- Verify deployed CDN/cache behavior, storage latency, physical devices, and real-network behavior.
+  Local Android E2E, including an explicitly throttled download, has passed.
 - Deploy the companion server changes separately from the DealSeek PR; leave the
   server switch off until the concrete staged artifacts are verified.
 
@@ -205,3 +207,112 @@ Sanitized measurements and HTTP evidence are in
 The recording runner is `scripts/record-bundle-diff.py`; its `--save-fresh` and
 `--save-existing` modes save baselines from the disposable simulator, then
 `--scenario fresh|existing --mode full|normal` records and validates each run.
+
+## Internal rollout and download observability
+
+Patch generation remains controlled by `OTA_BUNDLE_DIFFING_ENABLED=true`.
+Serving now also requires an eligible installation. Default/unset rollout mode
+is `allowlist`, with an empty list denying patches to everyone:
+
+```sh
+OTA_BUNDLE_DIFFING_ENABLED=true
+OTA_BUNDLE_DIFFING_ROLLOUT=allowlist
+OTA_BUNDLE_DIFFING_DEVICE_IDS=INSTALLATION_UUID_1,INSTALLATION_UUID_2
+```
+
+Use the UUID from Expo's `EAS-Client-ID` asset/manifest request header. It is an
+**installation ID**, not a PostHog distinct ID, account ID, hardware ID or push token.
+The native Expo client sends it on iOS and Android, including initial downloads
+before JavaScript/PostHog initializes. `expo-eas-client` also exports `clientID`
+for an internal debug console. The local harness logs it in asset events; obtain
+an internal tester's ID from their debug session or a controlled request capture.
+Do not log all production installation IDs or put them in metric labels.
+Reinstallation/data clearing may require enrolling a new ID. This is a rollout
+control, not an authentication boundary: client-supplied IDs can be spoofed.
+
+Unlisted/missing/invalid IDs receive ordinary full bundles. Invalid rollout modes
+fail closed. Explicit `OTA_BUNDLE_DIFFING_ROLLOUT=all` allows broad rollout later;
+setting `OTA_BUNDLE_DIFFING_ENABLED=false` is the global kill switch. These are
+server environment settings, requiring a server restart/deployment. They are
+independent of the app's `ota-reload-enabled` flag, which controls **when to apply**
+an update. No new app build is required for compatible Expo clients.
+
+Prometheus `/metrics` exposes two counters with bounded labels
+`platform`, `delivery`, `reason`:
+
+- `ota_bundle_responses_total`: exact launch-asset requests only, excluding images/fonts.
+- `ota_bundle_response_bytes_total`: actual body bytes written by this server.
+
+Deliveries: `patch` (HTTP 226), `full` (HTTP 200), `full_redirect` (HTTP 302 to CDN),
+`write_error` (interrupted response), and `error` (other HTTP errors). Full reasons
+include `disabled`, `device_not_allowed`, `not_negotiated`, `patch_unavailable`,
+`invalid_base`, `invalid_target`, `unpinned`, `target_mismatch`, `invalid_record`,
+and `invalid_patch`. Patch responses use `available`.
+
+`full_after_patch` means the same installation/base/target/branch/runtime/platform/
+asset requested a full bundle without `A-IM` within ten minutes of a patch attempt.
+Expo 57's native rejection retry does exactly this. It is **correlated fallback
+traffic, not confirmed device-side rejection**: repeated matching requests can
+also qualify. Counts are requests, not unique users or successful installations.
+HTTP 226 alone does not prove that reconstruction or installation succeeded.
+
+Correlation uses hashed identifiers and ten-minute TTLs in shared Redis, with
+optional telemetry reads/writes capped at 50 ms. Cache failure loses correlation
+but leaves download handling intact. Local cache mode uses a bounded 10,000-entry
+process-local tracker; restarts, capacity limits, and cross-replica retries can
+undercount. Shared Redis is recommended for multiple API replicas. CDN redirects
+count as full download decisions, but their transfer sizes/completion are unknown;
+redirect body bytes are not full bundle bytes. Failed metadata resolution cannot
+identify a launch asset and is excluded from these bundle-only counters.
+
+Useful PromQL (select your service/job in a shared Prometheus deployment):
+
+```promql
+# Patch vs full responses / CDN redirects during the last day
+sum by (platform, delivery) (
+  increase(ota_bundle_responses_total{delivery=~"patch|full|full_redirect"}[24h])
+)
+
+# Why full bundles were selected (separates rollout exclusions from fallbacks)
+sum by (platform, reason) (
+  increase(ota_bundle_responses_total{delivery=~"full|full_redirect"}[24h])
+)
+
+# Full requests correlated with a recent patch attempt
+sum by (platform) (
+  increase(ota_bundle_responses_total{reason="full_after_patch"}[24h])
+)
+
+# Directly served bundle bytes, excluding redirect bodies
+sum by (platform, delivery) (
+  increase(ota_bundle_response_bytes_total{delivery=~"patch|full"}[24h])
+)
+```
+
+The local harness exposes `/metrics` as well. Unlike its earlier unconditional
+patch delivery, it now obeys the same allowlist default; set explicit `all` for
+legacy full-vs-patch fixture scripts, or enroll the simulator installation to test
+internal rollout. Its optional `bytesPerSecond` state field caps launch-bundle
+bandwidth for slow-network testing; this is an explicit artificial network cap.
+
+## Installation allowlist verification (October 13, 2026)
+
+The Android release-mode app was tested against the local server with the same
+real Expo installation UUID preserved while resetting its OTA cache between cases.
+No synthetic check/download delays were added:
+
+| Server configuration / scenario | Native bundle responses | Verified metric |
+| --- | --- | --- |
+| Empty allowlist | Full HTTP 200: 9,640,035 B | `full / device_not_allowed = 1` |
+| Installation allowlisted | Patch HTTP 226: 3,636,850 B | `patch / available = 1` |
+| Allowlisted, deliberately corrupt patch response | HTTP 226 then HTTP 200: 3,636,850 + 9,640,035 B | `patch / available = 1`, `full / full_after_patch = 1` |
+
+Every case matched the target bundle SHA-256 and completed a successful cold
+launch with zero failed launches. The native app and its reload flag were unchanged;
+all configuration and fault injection were isolated to the loopback test server.
+Sanitized HTTP/metric evidence: [bundle-rollout-android.json](evidence/bundle-rollout-android.json).
+
+Validation: focused Go race tests and vet pass, including iOS/Android handler
+coverage, allowlist fail-closed behavior, metric labels, retry identity/expiry,
+write failures, and Redis telemetry deadlines. The full Go suite still has the
+same four previously documented asset/CDN integration failures.
