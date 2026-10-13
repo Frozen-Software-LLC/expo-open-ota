@@ -59,7 +59,7 @@ func AssetsHandler(w http.ResponseWriter, r *http.Request) {
 	if served {
 		return
 	}
-	w.Header().Set("Vary", "Accept-Encoding, A-IM, Expo-Current-Update-ID, Expo-Requested-Update-ID, EAS-Client-ID")
+	w.Header().Set("Vary", "Accept-Encoding, A-IM, Expo-Current-Update-ID, Expo-Requested-Update-ID, EAS-Client-ID, Expo-OTA-Cohort")
 	w.Header().Set("Cache-Control", "private, no-store")
 	cdn := cdn2.GetCDN()
 	if cdn == nil || preventCDNRedirection {
@@ -74,7 +74,7 @@ func AssetsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		// Full responses are also negotiated per installation/base.
 		w.Header().Set("Cache-Control", "private, no-store")
-		w.Header().Set("Vary", "Accept-Encoding, A-IM, Expo-Current-Update-ID, Expo-Requested-Update-ID, EAS-Client-ID")
+		w.Header().Set("Vary", "Accept-Encoding, A-IM, Expo-Current-Update-ID, Expo-Requested-Update-ID, EAS-Client-ID, Expo-OTA-Cohort")
 		if resp.StatusCode != 200 {
 			http.Error(w, string(resp.Body), resp.StatusCode)
 			return

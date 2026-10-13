@@ -59,6 +59,7 @@ func TestBundlePatchAssets(t *testing.T) {
 			recordJSON, _ := json.Marshal(record)
 			write(key+".json", recordJSON)
 			write(key+".bsdiff", patch)
+			cohort := ""
 			request := func(baseID, requestedID, aim string) *httptest.ResponseRecorder {
 				t.Helper()
 				r := httptest.NewRequest("GET", "/assets?branch=local-diff&runtimeVersion=9090.1&updateId=1700000000000&platform="+platform+"&asset=bundle.hbc", nil)
@@ -66,6 +67,9 @@ func TestBundlePatchAssets(t *testing.T) {
 				r.Header.Set("Expo-Requested-Update-ID", requestedID)
 				r.Header.Set("A-IM", aim)
 				r.Header.Set("EAS-Client-ID", "dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+				if cohort != "" {
+					r.Header.Set(bundlepatch.CohortHeader, cohort)
+				}
 				w := httptest.NewRecorder()
 				AssetsHandler(w, r)
 				return w
@@ -85,6 +89,18 @@ func TestBundlePatchAssets(t *testing.T) {
 			actual, err := bspatch.Bytes(base, w.Body.Bytes())
 			require.NoError(t, err)
 			require.Equal(t, target, actual)
+			// Internal builds qualify by cohort header, with no enrolled installations.
+			t.Setenv("OTA_BUNDLE_DIFFING_DEVICE_IDS", "")
+			t.Setenv("OTA_BUNDLE_DIFFING_COHORTS", "internal")
+			cohort = "internal"
+			w = request(baseUUID, targetUUID, "bsdiff")
+			require.Equal(t, 226, w.Code, w.Body.String())
+			require.Contains(t, w.Header().Get("Vary"), bundlepatch.CohortHeader)
+			require.EqualValues(t, 2, bundleMetric(t, "ota_bundle_responses_total", "patch", "available"))
+			cohort = "store"
+			require.Equal(t, 200, request(baseUUID, targetUUID, "bsdiff").Code)
+			cohort = ""
+			t.Setenv("OTA_BUNDLE_DIFFING_DEVICE_IDS", "dddddddd-dddd-4ddd-8ddd-dddddddddddd")
 			for _, tc := range []struct{ name, base, target, aim string }{{"legacy", baseUUID, targetUUID, ""}, {"missing-base", "", targetUUID, "bsdiff"}, {"unknown-base", "cccccccc-cccc-4ccc-8ccc-cccccccccccc", targetUUID, "bsdiff"}, {"wrong-target", baseUUID, baseUUID, "bsdiff"}, {"unsupported", baseUUID, targetUUID, "other"}} {
 				t.Run(tc.name, func(t *testing.T) {
 					w := request(tc.base, tc.target, tc.aim)

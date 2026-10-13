@@ -127,7 +127,7 @@ func Serve(w http.ResponseWriter, record Record, patch []byte) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", fmt.Sprint(len(patch)))
 	w.Header().Set("Cache-Control", "private, no-store")
-	w.Header().Set("Vary", "A-IM, Expo-Current-Update-ID, Expo-Requested-Update-ID, Accept-Encoding, EAS-Client-ID")
+	w.Header().Set("Vary", "A-IM, Expo-Current-Update-ID, Expo-Requested-Update-ID, Accept-Encoding, EAS-Client-ID, Expo-OTA-Cohort")
 	w.Header().Set("IM", "bsdiff")
 	w.Header().Set("Expo-Base-Update-ID", record.BaseID)
 	w.WriteHeader(http.StatusIMUsed)
