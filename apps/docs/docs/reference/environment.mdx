@@ -105,6 +105,7 @@ You can set these variables in a `.env` file for local development or in your de
 | `OTA_BUNDLE_DIFFING_ENABLED` | `false` | Enable offline patch generation and permit eligible patch serving. Global kill switch. |
 | `OTA_BUNDLE_DIFFING_ROLLOUT` | `allowlist` | `allowlist` restricts patches to selected installations; `all` explicitly enables broad serving. Unknown values deny patch serving. |
 | `OTA_BUNDLE_DIFFING_DEVICE_IDS` | empty | Comma-separated Expo `EAS-Client-ID` installation UUIDs. Empty means no devices receive patches in allowlist mode. |
+| `OTA_BUNDLE_DIFFING_COHORTS` | empty | Comma-separated build cohorts (case-insensitive) that receive patches in allowlist mode, matched against the `Expo-OTA-Cohort` request header. Use `internal` for internal TestFlight builds. |
 
 Unselected installations continue downloading full bundles. These server controls
 are independent of client-side reload behavior. Patch and full response counts

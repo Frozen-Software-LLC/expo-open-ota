@@ -32,3 +32,28 @@ func TestDeviceEligibility(t *testing.T) {
 		})
 	}
 }
+
+func TestCohortEligibility(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, cohorts, cohort string
+		want                        bool
+	}{
+		{"internal build", "", "internal", "internal", true},
+		{"case and spacing", "allowlist", "beta, Internal ", "INTERNAL", true},
+		{"no cohorts configured", "allowlist", "", "internal", false},
+		{"other cohort", "allowlist", "internal", "beta", false},
+		{"store build sends none", "allowlist", "internal", "", false},
+		{"blank entry does not match blank header", "allowlist", "internal,,", " ", false},
+		{"unknown mode", "al", "internal", "internal", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("OTA_BUNDLE_DIFFING_ROLLOUT", tc.mode)
+			t.Setenv("OTA_BUNDLE_DIFFING_COHORTS", tc.cohorts)
+			t.Setenv("OTA_BUNDLE_DIFFING_DEVICE_IDS", "")
+			r := httptest.NewRequest("GET", "/assets", nil)
+			r.Header.Set("EAS-Client-ID", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+			r.Header.Set(CohortHeader, tc.cohort)
+			require.Equal(t, tc.want, DeviceEligible(r))
+		})
+	}
+}

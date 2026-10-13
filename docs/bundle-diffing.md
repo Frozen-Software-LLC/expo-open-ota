@@ -230,7 +230,33 @@ Do not log all production installation IDs or put them in metric labels.
 Reinstallation/data clearing may require enrolling a new ID. This is a rollout
 control, not an authentication boundary: client-supplied IDs can be spoofed.
 
-Unlisted/missing/invalid IDs receive ordinary full bundles. Invalid rollout modes
+### Internal builds (no installation IDs)
+
+A build can opt a whole cohort in instead. Builds send
+`Expo-OTA-Cohort` through expo-updates `requestHeaders`; Expo attaches those
+headers to manifest **and** asset requests on iOS and Android, so the main
+server sees the cohort on the launch-bundle download it patches:
+
+```sh
+OTA_BUNDLE_DIFFING_COHORTS=internal
+```
+
+```ts
+// apps/native/app.config.ts, for an internal TestFlight profile only
+requestHeaders: {
+  "expo-channel-name": updateChannel,
+  ...(process.env.EXPO_OTA_COHORT ? { "Expo-OTA-Cohort": process.env.EXPO_OTA_COHORT } : {}),
+},
+```
+
+Anyone who installs that build gets patches; store builds send no cohort and
+keep full bundles. The header is baked into the binary at build time, so it
+cannot be added to an existing build by OTA. Matching is case-insensitive and
+the header is in `Vary`. Like installation IDs, it is a rollout control and can
+be spoofed. Responses and metrics are unchanged: an eligible cohort follows the
+same `patch / available` and fallback paths as an allowlisted installation.
+
+Unlisted/missing/invalid IDs (without an allowed cohort) receive ordinary full bundles. Invalid rollout modes
 fail closed. Explicit `OTA_BUNDLE_DIFFING_ROLLOUT=all` allows broad rollout later;
 setting `OTA_BUNDLE_DIFFING_ENABLED=false` is the global kill switch. These are
 server environment settings, requiring a server restart/deployment. They are
