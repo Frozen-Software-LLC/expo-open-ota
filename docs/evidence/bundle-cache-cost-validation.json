@@ -1,0 +1,486 @@
+{
+  "date": "2026-10-16",
+  "timezone": "Asia/Manila",
+  "scope": "60-second patch lookup cache; actual asset-handler HTTP requests with storage-open instrumentation, live isolated Cloudflare delivery to physical iPhone and Android emulator, plus native local failure cases. No production publication/config change.",
+  "cache": {
+    "ttlSeconds": 60,
+    "scope": "per API process",
+    "maxEntries": 1024,
+    "maxPayloadBytes": 4194304,
+    "coalescesConcurrentSameKey": true,
+    "negativeCaching": "confirmed missing objects only; errors retry immediately",
+    "key": "branch/runtime/storage-update-id/object path",
+    "remainingValidation": "cached bytes still undergo identity/record validation; direct patch bodies remain uncached and hash-checked"
+  },
+  "sourceHashes": {
+    "internal/handlers/bundle_patch.go": "2e1ffd54640fa492db0a7e05727afe8f06112380ef9c8dd6fa67855bec2df994",
+    "internal/handlers/bundle_patch_cache.go": "b80b32fa9facf9dad4406940a9039fe34cdd94516216ab4ad1b4ddf6650616fe"
+  },
+  "readsBefore": [
+    {
+      "scenario": "patch-redirect",
+      "requests": 10,
+      "storageReadAttempts": 20,
+      "perRequest": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "objectCounts": {
+        "local-diff/9090.1/1791864490598/update-metadata.json": 10,
+        "local-diff/9090.1/1791864490598/bundle-patches/ios/e87e0d84-51fc-4240-99e7-b0426013ea8b.json": 10
+      },
+      "statuses": {
+        "302": 10
+      }
+    },
+    {
+      "scenario": "embedded-miss",
+      "requests": 10,
+      "storageReadAttempts": 20,
+      "perRequest": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "objectCounts": {
+        "local-diff/9090.1/1791864490598/update-metadata.json": 10,
+        "local-diff/9090.1/1791864490598/bundle-patches/ios/81523945-9a1a-4b0c-9413-c11bf98a7c6d.json": 10
+      },
+      "statuses": {
+        "302": 10
+      }
+    },
+    {
+      "scenario": "no-aim",
+      "requests": 10,
+      "storageReadAttempts": 0,
+      "perRequest": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "objectCounts": {},
+      "statuses": {
+        "302": 10
+      }
+    }
+  ],
+  "readsAfter": [
+    {
+      "scenario": "patch-redirect",
+      "requests": 10,
+      "storageReadAttempts": 0,
+      "perRequest": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "objectCounts": {},
+      "statuses": {
+        "302": 10
+      }
+    },
+    {
+      "scenario": "embedded-miss",
+      "requests": 10,
+      "storageReadAttempts": 1,
+      "perRequest": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "objectCounts": {
+        "local-diff/9090.1/1791864490598/bundle-patches/ios/81523945-9a1a-4b0c-9413-c11bf98a7c6d.json": 1
+      },
+      "statuses": {
+        "302": 10
+      }
+    },
+    {
+      "scenario": "no-aim",
+      "requests": 10,
+      "storageReadAttempts": 0,
+      "perRequest": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "objectCounts": {},
+      "statuses": {
+        "302": 10
+      }
+    }
+  ],
+  "concurrencyAndRealExpiry": [
+    {
+      "scenario": "100 concurrent warm patch redirects",
+      "requests": 100,
+      "storageOpenAttempts": [],
+      "storageReadCount": 0,
+      "elapsedSeconds": 0.0208,
+      "httpStatuses": [
+        302
+      ]
+    },
+    {
+      "scenario": "100 concurrent identical uncached misses",
+      "requests": 100,
+      "storageOpenAttempts": [
+        "local-diff/9090.1/1791864490598/bundle-patches/ios/dddddddd-1234-4123-8123-dddddddddddd.json"
+      ],
+      "storageReadCount": 1,
+      "elapsedSeconds": 0.0159,
+      "httpStatuses": [
+        302
+      ]
+    },
+    {
+      "scenario": "first patch request after 61 seconds",
+      "requests": 1,
+      "storageOpenAttempts": [
+        "local-diff/9090.1/1791864490598/.check",
+        "local-diff/9090.1/1791864490598/rollback",
+        "local-diff/9090.1/1791864490598/update-metadata.json",
+        "local-diff/9090.1/1791864490598/update-metadata.json",
+        "local-diff/9090.1/1791864490598/bundle-patches/ios/e87e0d84-51fc-4240-99e7-b0426013ea8b.json"
+      ],
+      "storageReadCount": 5,
+      "elapsedSeconds": 0.0138,
+      "httpStatuses": [
+        302
+      ]
+    },
+    {
+      "scenario": "first missing record after 61 seconds",
+      "requests": 1,
+      "storageOpenAttempts": [
+        "local-diff/9090.1/1791864490598/bundle-patches/ios/81523945-9a1a-4b0c-9413-c11bf98a7c6d.json"
+      ],
+      "storageReadCount": 1,
+      "elapsedSeconds": 0.0019,
+      "httpStatuses": [
+        302
+      ]
+    },
+    {
+      "scenario": "10 repeated patch redirects after refresh",
+      "requests": 10,
+      "storageOpenAttempts": [],
+      "storageReadCount": 0,
+      "elapsedSeconds": 0.0134,
+      "httpStatuses": [
+        302
+      ]
+    }
+  ],
+  "liveReadyCdnWarmRequests": {
+    "requests": 10,
+    "bucketReads": 0,
+    "httpStatus": 302
+  },
+  "workerReadProbe": {
+    "scope": "Production Worker module with instrumented R2 and Cache API adapters; not live Cloudflare billing or cross-colo measurement.",
+    "results": [
+      {
+        "scenario": "cold HEAD then GET",
+        "gets": 1,
+        "heads": 1
+      },
+      {
+        "scenario": "100 warm GETs",
+        "gets": 0,
+        "heads": 0
+      },
+      {
+        "scenario": "100 simultaneous cold GETs, one local Worker execution environment",
+        "gets": 100,
+        "heads": 0
+      }
+    ]
+  },
+  "liveCacheHttp": [
+    {
+      "status": 200,
+      "bytes": 1480223,
+      "sha256": "090f38cca647c1a6e9c480cf7e6851b3eebd32535b748e38b0b6d3e390891f49",
+      "cache": "HIT",
+      "colo": "a4b0bddba8927493-MNL"
+    },
+    {
+      "status": 200,
+      "bytes": 1480223,
+      "sha256": "090f38cca647c1a6e9c480cf7e6851b3eebd32535b748e38b0b6d3e390891f49",
+      "cache": "HIT",
+      "colo": "a4b0bddcfba9d0fa-MNL"
+    }
+  ],
+  "liveNativeCases": [
+    {
+      "platform": "physical iPhone 16 Pro",
+      "case": "cdn",
+      "passed": true,
+      "apiStatuses": [
+        302
+      ],
+      "targetSha256": "08558d2661ed1571802efad49fcb377a8cfb397e26e8f905eddc03739810fbb1",
+      "successfulLaunches": 1,
+      "failedLaunches": 0,
+      "bundlePayloadBytes": 1480223,
+      "nativeDownloadSecondsRounded": 2.0
+    },
+    {
+      "platform": "physical iPhone 16 Pro",
+      "case": "cdn-missing",
+      "passed": true,
+      "apiStatuses": [
+        302,
+        200
+      ],
+      "targetSha256": "08558d2661ed1571802efad49fcb377a8cfb397e26e8f905eddc03739810fbb1",
+      "successfulLaunches": 1,
+      "failedLaunches": 0,
+      "bundlePayloadBytes": 9564115,
+      "nativeDownloadSecondsRounded": 3.0
+    },
+    {
+      "platform": "physical iPhone 16 Pro",
+      "case": "cdn-corrupt",
+      "passed": true,
+      "apiStatuses": [
+        302,
+        200
+      ],
+      "targetSha256": "08558d2661ed1571802efad49fcb377a8cfb397e26e8f905eddc03739810fbb1",
+      "successfulLaunches": 1,
+      "failedLaunches": 0,
+      "bundlePayloadBytes": 11044338,
+      "nativeDownloadSecondsRounded": 4.0
+    },
+    {
+      "platform": "Android emulator",
+      "case": "cdn",
+      "passed": true,
+      "apiStatuses": [
+        302
+      ],
+      "targetSha256": "a861b209c4b0de8f2cd606c830c3143d3658400d4103d7e01e6fda4e156de5b9",
+      "successfulLaunches": 1,
+      "failedLaunches": 0,
+      "bundlePayloadBytes": 3636850,
+      "launchToReadySecondsIncludingHarness": 2.877
+    },
+    {
+      "platform": "Android emulator",
+      "case": "cdn-missing",
+      "passed": true,
+      "apiStatuses": [
+        302,
+        200
+      ],
+      "targetSha256": "a861b209c4b0de8f2cd606c830c3143d3658400d4103d7e01e6fda4e156de5b9",
+      "successfulLaunches": 1,
+      "failedLaunches": 0,
+      "bundlePayloadBytes": 9640035,
+      "launchToReadySecondsIncludingHarness": 7.012
+    },
+    {
+      "platform": "Android emulator",
+      "case": "cdn-corrupt",
+      "passed": true,
+      "apiStatuses": [
+        302,
+        200
+      ],
+      "targetSha256": "a861b209c4b0de8f2cd606c830c3143d3658400d4103d7e01e6fda4e156de5b9",
+      "successfulLaunches": 1,
+      "failedLaunches": 0,
+      "bundlePayloadBytes": 13276885,
+      "launchToReadySecondsIncludingHarness": 2.878
+    }
+  ],
+  "noNewOTA": [
+    {
+      "platform": "physical iPhone 16 Pro",
+      "manifestRequests": [
+        "2026/10/16 02:04:51 manifest platform=ios current=167b6af5-2383-4425-9dc8-28bdab88fe48 target=1791864490598"
+      ],
+      "assetRequests": [],
+      "bundleBytes": 0
+    },
+    {
+      "platform": "Android emulator",
+      "manifestRequests": [
+        "2026/10/16 02:07:23 manifest platform=android current=e1089075-6db4-6ec4-8ab3-78506769767a target=1791833461071"
+      ],
+      "assetRequests": [],
+      "bundleBytes": 0
+    }
+  ],
+  "localNativeCases": {
+    "passed": 8,
+    "platforms": [
+      "iOS simulator",
+      "Android emulator"
+    ],
+    "cases": [
+      "valid",
+      "missing",
+      "corrupt",
+      "storage-error"
+    ],
+    "targetHashAndSuccessfulLaunchVerified": true
+  },
+  "rawHttp429": [
+    {
+      "platform": "ios",
+      "scenario": "raw HTTP 429 before Worker executes",
+      "observationSeconds": 12,
+      "targetReady": false,
+      "fullBundleRetryObserved": false,
+      "rows": [
+        [
+          "0C7B7B40AB3C479086D85B6D36D406EB",
+          5,
+          1,
+          0
+        ],
+        [
+          "04B3E8B978AE4EB78E3F9FD45D9696A2",
+          3,
+          0,
+          0
+        ]
+      ],
+      "apiStatuses": [
+        302
+      ],
+      "existingBaseLaunchSucceeded": true
+    },
+    {
+      "platform": "android",
+      "scenario": "raw HTTP 429 before Worker executes",
+      "observationSeconds": 12,
+      "targetReady": false,
+      "fullBundleRetryObserved": false,
+      "rows": [
+        [
+          "4B4796600F6042ADAB6009CA69B39D9E",
+          1,
+          1,
+          0
+        ],
+        [
+          "E10890756DB46EC48AB378506769767A",
+          3,
+          0,
+          0
+        ]
+      ],
+      "apiStatuses": [
+        302
+      ],
+      "existingBaseLaunchSucceeded": true
+    }
+  ],
+  "findings": [
+    {
+      "severity": "operational",
+      "finding": "Live CDN returned HTTP 429 / Cloudflare 1027 before plan upgrade; HTTP 200 and HIT verified after user upgraded. No billing settings changed by agent."
+    },
+    {
+      "severity": "reliability",
+      "finding": "Raw HTTP 429 after redirect did not trigger a full-bundle retry on either native client in 12 seconds; base update still launched. Worker-generated missing/storage-error signals do trigger fallback. Requires native transport-error handling or operational mitigation; not fixed by lookup cache."
+    },
+    {
+      "severity": "cost",
+      "finding": "Production Worker module in a controlled adapter: 100 simultaneous cold GETs caused 100 R2 get calls; 100 warm GETs caused zero. Not a production R2 bill or multi-colo benchmark."
+    },
+    {
+      "severity": "cost",
+      "finding": "First HTTP request after 61 seconds opened five storage objects: .check, rollback, update-metadata twice, patch record. The duplicate metadata read occurs once per validation/cache refresh, not each warm client."
+    },
+    {
+      "severity": "expected transfer overhead",
+      "finding": "Corrupt patch then full fallback transfers both bodies: iPhone 11,044,338 bytes vs 9,564,115 full; Android 13,276,885 vs 9,640,035 full. Missing patch returns zero patch bytes."
+    },
+    {
+      "severity": "cost",
+      "finding": "100 requests on a cold API (32 test threads) caused 98 storage reads: validation/metadata reads overlapped and 38 direct patch body reads occurred while CDN readiness was pending. Patch-record lookup was still coalesced to one. Counts are a local concurrency sample, not fleet projections."
+    }
+  ],
+  "validation": {
+    "focusedGoRace": "passed",
+    "goVetAndBuild": "passed",
+    "workerTests": "5 passed",
+    "fullGoSuite": "four pre-existing failures in test/assets_test.go: gzip bundle, brotli bundle, gzip PNG, prevent-CDN-redirection; all other packages passed"
+  },
+  "limitations": [
+    "Native tests use isolated runtime 9090.1 and explicit cold starts; they do not test the three-second JS launch gate.",
+    "Live fallback bundles served from local OTA server. The patch endpoint was live Cloudflare.",
+    "Native CDN payload sizes are known verified object sizes, not packet-level wire accounting; exclude TLS/HTTP overhead.",
+    "iPhone timing uses whole-second native timestamps; Android values include harness/startup time. Single runs are not latency benchmarks.",
+    "No production traffic volumes, invoice data or fleet-wide hit rates measured. Per-process cache multiplies cold reads across replicas.",
+    "Local Worker read-count experiment uses instrumented adapters, not billed R2 operations."
+  ],
+  "coldApiBurst": {
+    "scenario": "100 requests / 32 threads against freshly started API, cold validation + patch + CDN readiness caches",
+    "requests": 100,
+    "statuses": {
+      "226": 38,
+      "302": 62
+    },
+    "storageReadCounts": {
+      "local-diff/9090.1/1791864490598/.check": 15,
+      "local-diff/9090.1/1791864490598/rollback": 15,
+      "local-diff/9090.1/1791864490598/update-metadata.json": 16,
+      "local-diff/9090.1/1791864490598/metadata.json": 13,
+      "local-diff/9090.1/1791864490598/bundle-patches/ios/e87e0d84-51fc-4240-99e7-b0426013ea8b.json": 1,
+      "local-diff/9090.1/1791864490598/bundle-patches/ios/e87e0d84-51fc-4240-99e7-b0426013ea8b/090f38cca647c1a6e9c480cf7e6851b3eebd32535b748e38b0b6d3e390891f49.bsdiff": 38
+    },
+    "totalReads": 98,
+    "elapsedSeconds": 0.08428845800517593
+  }
+}

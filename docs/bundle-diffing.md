@@ -101,6 +101,23 @@ Legacy unpinned URLs retain their old behavior. Validation is cached for 60 seco
 to avoid repeated object-storage reads for every asset. Manifest/asset cache keys
 are versioned so old cached unpinned URLs are not reused after deployment.
 
+Patch negotiation caches stored update metadata and patch-record bytes, including
+confirmed missing objects, for 60 seconds per API process. Concurrent requests
+for the same key share a single lookup. The cache is bounded to 1,024 entries
+and 4 MiB of payload, uses no Redis requests, and never caches storage/read
+errors. Identity validation still runs for every request; patch bodies are not
+cached here. A patch published after a cached miss can take up to 60 seconds
+to become eligible (the full-bundle path remains available). Cache keys include
+branch, runtime, storage update ID and object path.
+
+[Measured cache, native delivery and cost checks](evidence/bundle-cache-cost-validation.json)
+show zero bucket reads for warm patch redirects. Remaining findings include a
+duplicate metadata reads during validation refresh/cold API bursts, concurrent cold Worker requests
+reading R2 independently, and no native full retry for a raw HTTP 429 received
+after a redirect. A Worker-generated fallback signal is different from an edge
+error that occurs before the Worker executes. The latter leaves the existing
+update running and needs separate native transport-error handling.
+
 Patch negotiation occurs before full-bundle CDN redirection. Direct patches and
 redirect decisions are private/no-store. New v2 patches can redirect to a ready
 CDN under a content-addressed URL; the edge response is publicly cacheable because

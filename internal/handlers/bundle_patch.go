@@ -38,8 +38,9 @@ func tryServeBundlePatch(w http.ResponseWriter, r *http.Request, req assets.Asse
 	if err != nil || target == nil {
 		return false, "target_unavailable"
 	}
-	stored, err := update.RetrieveUpdateStoredMetadata(*target)
-	if err != nil || stored == nil || !strings.EqualFold(stored.UpdateUUID, targetID.String()) || stored.Platform != req.Platform {
+	storedData, err := readCachedPatchObject(*target, "update-metadata.json", 64<<10)
+	var stored types.UpdateStoredMetadata
+	if err != nil || json.Unmarshal(storedData, &stored) != nil || !strings.EqualFold(stored.UpdateUUID, targetID.String()) || stored.Platform != req.Platform {
 		return false, "target_mismatch"
 	}
 	metadata, err := update.GetMetadata(*target)
@@ -53,7 +54,7 @@ func tryServeBundlePatch(w http.ResponseWriter, r *http.Request, req assets.Asse
 	if req.AssetName != platform.Bundle {
 		return false, "not_launch_asset"
 	}
-	data, err := readPatchObject(*target, key+".json", 4096)
+	data, err := readCachedPatchObject(*target, key+".json", 4096)
 	if err != nil {
 		return false, "patch_unavailable"
 	}

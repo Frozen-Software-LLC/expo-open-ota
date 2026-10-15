@@ -16,7 +16,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 const baseUUID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -42,6 +44,10 @@ func TestBundlePatchAssets(t *testing.T) {
 			require.NoError(t, os.MkdirAll(dir, 0755))
 			write := func(name string, data []byte) {
 				t.Helper()
+				// Fixture mutations represent a fresh lookup epoch, not a live publication.
+				if strings.HasSuffix(name, ".json") {
+					bundlePatchObjects = newPatchObjectCache(time.Now)
+				}
 				require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0755))
 				require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0644))
 			}
@@ -84,7 +90,7 @@ func TestBundlePatchAssets(t *testing.T) {
 				require.Equal(t, 226, w.Code)
 				require.Equal(t, patch, w.Body.Bytes())
 			}
-			for _, tc := range []struct{ name, base, target, aim string }{{"legacy", baseUUID, targetUUID, ""}, {"missing-base", "", targetUUID, "bsdiff"}, {"unknown-base", "cccccccc-cccc-4ccc-8ccc-cccccccccccc", targetUUID, "bsdiff"}, {"wrong-target", baseUUID, baseUUID, "bsdiff"}, {"unsupported", baseUUID, targetUUID, "other"}} {
+			for _, tc := range []struct{ name, base, target, aim string }{{"legacy", baseUUID, targetUUID, ""}, {"missing-base", "", targetUUID, "bsdiff"}, {"unknown-base", "cccccccc-cccc-4ccc-8ccc-cccccccccccc", targetUUID, "bsdiff"}, {"wrong-target", baseUUID, baseUUID, "bsdiff"}, {"different-target-after-cache-hit", baseUUID, "ffffffff-ffff-4fff-8fff-ffffffffffff", "bsdiff"}, {"unsupported", baseUUID, targetUUID, "other"}} {
 				t.Run(tc.name, func(t *testing.T) {
 					w := request(tc.base, tc.target, tc.aim)
 					require.Equal(t, 200, w.Code)
