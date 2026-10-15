@@ -16,8 +16,63 @@ import (
 	"expo-open-ota/internal/cache"
 	"expo-open-ota/internal/types"
 	"github.com/gabstv/go-bsdiff/pkg/bspatch"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMain(m *testing.M) {
+	// Match the API's worker entry point so this regression exercises an actual
+	// child process, without a standalone helper beside the test executable.
+	if len(os.Args) > 1 && os.Args[1] == "--prepare-update-patches" {
+		if err := RunPatchPreparationCommand(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+func TestPatchJobStartsChildWithoutSiblingHelper(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("STORAGE_MODE", "local")
+	t.Setenv("LOCAL_BUCKET_BASE_PATH", root)
+	baseBytes := make([]byte, 32000)
+	rand.New(rand.NewSource(42)).Read(baseBytes)
+	targetBytes := bytes.Clone(baseBytes)
+	copy(targetBytes[100:], []byte("child process regression"))
+	baseID, targetID := uuid.NewString(), uuid.NewString()
+	for i, data := range [][]byte{baseBytes, targetBytes} {
+		id := []string{baseID, targetID}[i]
+		dir := filepath.Join(root, "child-test", "1", fmt.Sprint(1700000000000+1000*i))
+		require.NoError(t, os.MkdirAll(dir, 0755))
+		for name, content := range map[string][]byte{
+			".check": []byte("checked"), "bundle.hbc": data,
+			"metadata.json":        []byte(`{"fileMetadata":{"ios":{"bundle":"bundle.hbc"}}}`),
+			"update-metadata.json": []byte(fmt.Sprintf(`{"platform":"ios","updateUUID":%q}`, id)),
+		} {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, name), content, 0644))
+		}
+	}
+	target, err := GetUpdate("child-test", "1", "1700000001000")
+	require.NoError(t, err)
+	runPatchJob(*target)
+	key, err := bundlepatch.Key("ios", baseID)
+	require.NoError(t, err)
+	dir := filepath.Join(root, target.Branch, target.RuntimeVersion, target.UpdateId)
+	raw, err := os.ReadFile(filepath.Join(dir, key+".json"))
+	require.NoError(t, err)
+	var record bundlepatch.Record
+	require.NoError(t, json.Unmarshal(raw, &record))
+	require.Equal(t, targetID, record.TargetID)
+	objectKey, err := bundlepatch.ObjectKey(record)
+	require.NoError(t, err)
+	patch, err := os.ReadFile(filepath.Join(dir, objectKey))
+	require.NoError(t, err)
+	restored, err := bspatch.Bytes(baseBytes, patch)
+	require.NoError(t, err)
+	require.Equal(t, targetBytes, restored)
+}
 
 func TestPublicationPreparesCompatiblePatches(t *testing.T) {
 	// Exercise preparation synchronously below without spawning helper processes.
@@ -144,6 +199,18 @@ func TestPatchQueueBoundsAndDeduplicates(t *testing.T) {
 	require.False(t, q.enqueue(types.Update{UpdateId: "3"}))
 	release <- struct{}{}
 	require.Equal(t, second, <-started)
+}
+
+func TestPatchPreparationCommandRejectsInvalidArguments(t *testing.T) {
+	for _, args := range [][]string{
+		{},
+		{"--unknown"},
+		{"--branch", "../production", "--runtime", "1", "--update-id", "1700000000000"},
+		{"--branch", "preview", "--runtime", "1", "--update-id", "invalid"},
+		{"--branch", "preview", "--runtime", "1", "--update-id", "1700000000000", "extra"},
+	} {
+		require.Error(t, RunPatchPreparationCommand(args))
+	}
 }
 
 func TestFinalizationQueuesPatchesByDefault(t *testing.T) {

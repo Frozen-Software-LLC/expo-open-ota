@@ -331,7 +331,7 @@ func (b *S3Bucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdateId st
 			key := *object.Key
 			relPath := strings.TrimPrefix(key, sourcePrefix)
 
-			if relPath == "update-metadata.json" || relPath == ".check" || strings.HasSuffix(relPath, "/") {
+			if skipRepublishObject(relPath) || strings.HasSuffix(relPath, "/") {
 				continue
 			}
 

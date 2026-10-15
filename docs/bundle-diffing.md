@@ -40,8 +40,11 @@ Governed upload / promotion / republish
   -> subsequent compatible downloads receive the patch
 ```
 
-The Docker image includes the `prepare-update-patches` helper next to the API
-binary. One helper runs at a time per server process, with a queue of 16 waiting
+The API re-executes its own binary in `prepare-update-patches` mode, so local
+`go run`, the development container, and production use the same worker entry
+point without searching for a sibling executable. The Docker image also includes
+a standalone `prepare-update-patches` command for operator retries.
+One helper runs at a time per server process, with a queue of 16 waiting
 updates and a two-minute process deadline covering storage and generation. Inputs
 are capped at 64 MiB each; `GOMEMLIMIT=768MiB` is a **soft GC target**, not an OS
 memory ceiling. Allocate container memory for both API and one worker before
@@ -50,7 +53,7 @@ direct readers verify the record and patch hash before serving it. CDN delivery
 uses immutable object URLs and a readiness check; native clients still verify
 the reconstructed target hash.
 
-The queue is best-effort, not durable. A full queue, timeout, missing helper,
+The queue is best-effort, not durable. A full queue, timeout, child startup failure,
 restart, unsuitable patch, or storage error leaves full downloads available.
 The normal finalization retry or this storage-only maintenance command recovers
 missed jobs (it never finalizes an update or changes a channel):
@@ -60,8 +63,10 @@ missed jobs (it never finalizes an update or changes a channel):
 ./prepare-update-patches --branch BRANCH --runtime RUNTIME --update-id STORAGE_ID
 ```
 
-Existing patch records are reused only when identities and hashes match. Copied
-records from a republish are regenerated for the new UUID. Preparation skips
+Existing patch records are reused only when identities and hashes match. Republish
+skips the entire `bundle-patches/` namespace in local, S3 and GCS storage before
+reading/copying object bodies; finalization generates patches for the new UUID.
+Preparation skips
 rollback records, uncommitted uploads, other platforms and newer updates.
 
 ## Prepare an artifact locally

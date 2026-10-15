@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -84,7 +85,9 @@ func runPatchJob(target types.Update) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), patchJobTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, filepath.Join(filepath.Dir(executable), "prepare-update-patches"), "--branch", target.Branch, "--runtime", target.RuntimeVersion, "--update-id", target.UpdateId)
+	// Re-exec the running API in worker mode. This also works with go run, whose
+	// temporary executable has no sibling helper, and uses the exact server build.
+	cmd := exec.CommandContext(ctx, executable, "--prepare-update-patches", "--branch", target.Branch, "--runtime", target.RuntimeVersion, "--update-id", target.UpdateId)
 	// A soft GC target, not an OS memory limit. Container memory limits must leave
 	// headroom for the server and one worker. Inputs are bounded independently.
 	cmd.Env = append(os.Environ(), "GOMEMLIMIT=768MiB", "GOMAXPROCS=1")
@@ -92,6 +95,29 @@ func runPatchJob(target types.Update) {
 	if err := cmd.Run(); err != nil {
 		log.Printf("[bundle-diff] preparation failed for %s/%s/%s: %v; full download remains available", target.Branch, target.RuntimeVersion, target.UpdateId, err)
 	}
+}
+
+// RunPatchPreparationCommand is shared by API worker mode and the standalone
+// operator helper. Neither path starts HTTP listeners or runs migrations.
+func RunPatchPreparationCommand(args []string) error {
+	flags := flag.NewFlagSet("prepare-update-patches", flag.ContinueOnError)
+	branch := flags.String("branch", "", "Published target branch")
+	runtime := flags.String("runtime", "", "Published runtime")
+	id := flags.String("update-id", "", "Published storage update ID")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected patch preparation arguments")
+	}
+	if err := ValidatePatchJobPath(*branch, *runtime, *id); err != nil {
+		return err
+	}
+	target, err := GetUpdate(*branch, *runtime, *id)
+	if err != nil {
+		return err
+	}
+	return PreparePublishedBundlePatches(*target)
 }
 
 func readPatchInput(storage bucket.Bucket, target types.Update, name string, max int64) ([]byte, error) {

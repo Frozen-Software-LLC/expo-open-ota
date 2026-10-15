@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -32,6 +33,13 @@ type Bucket interface {
 }
 
 type BucketType string
+
+// Republish copies source bundles/assets, but regenerates target-specific
+// metadata and patches. Skip the entire patch namespace before any object read.
+func skipRepublishObject(name string) bool {
+	return name == "update-metadata.json" || name == ".check" ||
+		name == "bundle-patches" || strings.HasPrefix(name, "bundle-patches/")
+}
 
 const (
 	S3BucketType    BucketType = "s3"

@@ -28,6 +28,12 @@ type state struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--prepare-update-patches" {
+		if err := update.RunPatchPreparationCommand(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	root := flag.String("root", "", "Local fixture directory containing bucket/ and state.json")
 	finalize := flag.String("finalize-update", "", "Finalize a local fixture through the publication hook before serving")
 	patchEdge := flag.String("patch-edge", "", "Local protocol test only: redirect validated patches to http://127.0.0.1:9091")
