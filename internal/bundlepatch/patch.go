@@ -51,6 +51,23 @@ func Key(platform, baseID string) (string, error) {
 	return "bundle-patches/" + platform + "/" + id.String(), nil
 }
 
+// ObjectKey keeps old records readable while new publications use immutable,
+// content-addressed URLs. Different patch bytes cannot reuse a cache key.
+func ObjectKey(record Record) (string, error) {
+	key, err := Key(record.Platform, record.BaseID)
+	if err != nil {
+		return "", err
+	}
+	if record.Version == 1 {
+		return key + ".bsdiff", nil
+	}
+	hash, err := hex.DecodeString(record.PatchHash)
+	if record.Version != 2 || err != nil || len(hash) != sha256.Size || record.PatchHash != strings.ToLower(record.PatchHash) {
+		return "", errors.New("invalid content-addressed patch record")
+	}
+	return key + "/" + record.PatchHash + ".bsdiff", nil
+}
+
 // Prepare operates on exact uncompressed bundle bytes. Verify reconstruction
 // before storing anything; compare against compressed full-download cost.
 func Prepare(base, target []byte, record Record) (Record, []byte, error) {

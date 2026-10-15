@@ -16,7 +16,7 @@ inventory = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devi
 selected = next((d for ds in inventory['devices'].values() for d in ds if d['udid'] == device))
 assert selected['name'].startswith('DealSeek DEV-9212'), 'use a disposable DealSeek DEV-9212 simulator'
 cases = args.cases.split(',')
-assert all((c in ['full', 'normal', 'corrupt'] for c in cases))
+assert all((c in ['full', 'normal', 'corrupt', 'cdn', 'cdn-missing', 'cdn-corrupt', 'cdn-unavailable'] for c in cases))
 
 def sim(*args, check=True):
     return subprocess.run(['xcrun', 'simctl', *args], check=check, capture_output=True, text=True).stdout.strip()
@@ -48,6 +48,7 @@ for case in cases:
     sim('install', device, str(root / 'DealSeek.app'))
     container = Path(sim('get_app_container', device, bundle, 'data'))
     logOffset = (root / 'server.log').stat().st_size
+    edgeOffset = (root / 'edge.log').stat().st_size if case.startswith('cdn') else 0
     (root / 'state.json').write_text(json.dumps({'target': fixture['targetStorageId'], 'reloadEnabled': False, 'mode': case}))
     started = time.monotonic()
     sim('launch', device, bundle)
@@ -90,6 +91,16 @@ for case in cases:
         if 'Updates state change' not in d.get('message', '') and (d.get('level') == 'error' or any((s in d.get('message', '').lower() for s in ['applied diff', 'patch failed']))):
             selected.append(d)
     result = {'case': case, 'launchToDownloadReadySeconds': round(downloaded, 3), 'bundleRequests': bundles, 'totalBundleWireBytes': sum((e['bytes'] for e in bundles)), 'targetSha256': actual, 'targetRow': row, 'nativeEvents': selected}
+    if case.startswith('cdn'):
+        edge = [json.loads(l) for l in (root / 'edge.log').read_bytes()[edgeOffset:].decode().splitlines() if l.startswith('{')]
+        result['edgeRequests'] = edge
+        result['totalBundleWireBytes'] = sum(e['bytes'] for e in bundles if e['status'] != 302) + sum(e['bytes'] for e in edge)
+        assert len(edge) == 1 and edge[0]['status'] == 200, edge
+        assert [e['status'] for e in bundles] == ([302] if case == 'cdn' else [302, 200]), bundles
+        if case == 'cdn':
+            assert any('Applied diff' in e.get('message', '') for e in selected), selected
+        else:
+            assert bundles[-1]['patchRequested'] == '', bundles
     if case == 'normal':
         assert [e['status'] for e in bundles] == [226]
         assert any(('Applied diff' in e.get('message', '') for e in selected))

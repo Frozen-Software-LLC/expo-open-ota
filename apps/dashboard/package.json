@@ -7,6 +7,7 @@
     "dev": "VITE_OTA_API_URL=http://localhost:3000 vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test:metrics": "tsc --project tsconfig.metrics-test.json && node --test .metrics-tests/test/bundle-metrics.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

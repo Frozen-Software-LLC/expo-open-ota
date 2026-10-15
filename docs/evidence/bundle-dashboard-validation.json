@@ -1,0 +1,34 @@
+{
+  "scope": "Local built-in OTA dashboard. Browser preview uses seeded sample counters, not production telemetry.",
+  "date": "2026-10-15",
+  "endpoint": "GET /api/bundle-metrics",
+  "route": "/dashboard/bundle-metrics",
+  "checks": {
+    "authentication": "Unauthenticated and invalid-token requests rejected; authenticated snapshot returned with private, no-store.",
+    "model": "4 tests passed: share denominator, filters/correlation, empty/error-only data, unknown labels.",
+    "go": "Focused race tests, authenticated router test, vet, and build passed.",
+    "dashboard": "Production TypeScript/Vite build and focused ESLint passed.",
+    "browser": [
+      "Populated view",
+      "iOS filter",
+      "Android filter",
+      "Loading state",
+      "Initial error without zero counters",
+      "Failed refresh preserves stale data",
+      "Recovery",
+      "Empty state",
+      "Server-instance change notice"
+    ]
+  },
+  "knownFullSuiteFailures": [
+    "TestToRetrieveBundleAssetWithGzipCompression",
+    "TestToRetrieveBundleAssetWithBrotliCompression",
+    "TestToRetrievePNGAssetWithGzipCompression",
+    "TestPreventCDNRedirectionHeader"
+  ],
+  "limitations": [
+    "Process-lifetime totals only; no historical storage or aggregation across replicas.",
+    "Full after patch is correlated requests, not confirmed native rejection.",
+    "CDN transfer bytes, cache hits, completed installations and bandwidth savings are not measured."
+  ]
+}

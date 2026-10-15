@@ -5,6 +5,7 @@ import (
 	"expo-open-ota/internal/assets"
 	"expo-open-ota/internal/bucket"
 	"expo-open-ota/internal/bundlepatch"
+	"expo-open-ota/internal/cdn"
 	"expo-open-ota/internal/types"
 	"expo-open-ota/internal/update"
 	"github.com/google/uuid"
@@ -57,10 +58,26 @@ func tryServeBundlePatch(w http.ResponseWriter, r *http.Request, req assets.Asse
 		return false, "patch_unavailable"
 	}
 	var record bundlepatch.Record
-	if json.Unmarshal(data, &record) != nil || record.Version != 1 || record.BaseID != baseID.String() || record.TargetID != targetID.String() || record.Runtime != req.RuntimeVersion || record.Platform != req.Platform || record.Asset != req.AssetName || record.PatchBytes <= 0 || record.PatchBytes > bundlepatch.MaxPatchBytes || record.GzipBytes <= 0 || int64(record.PatchBytes)*10 >= int64(record.GzipBytes)*9 {
+	if json.Unmarshal(data, &record) != nil || record.BaseID != baseID.String() || record.TargetID != targetID.String() || record.Runtime != req.RuntimeVersion || record.Platform != req.Platform || record.Asset != req.AssetName || record.PatchBytes <= 0 || record.PatchBytes > bundlepatch.MaxPatchBytes || record.GzipBytes <= 0 || int64(record.PatchBytes)*10 >= int64(record.GzipBytes)*9 {
 		return false, "invalid_record"
 	}
-	patch, err := readPatchObject(*target, key+".bsdiff", int64(record.PatchBytes))
+	objectKey, err := bundlepatch.ObjectKey(record)
+	if err != nil {
+		return false, "invalid_record"
+	}
+	if record.Version == 2 && r.Header.Get("prevent-cdn-redirection") != "true" {
+		if provider := cdn.GetCDN(); provider != nil {
+			location, err := provider.ComputeRedirectionURLForAsset(req.Branch, req.RuntimeVersion, req.UpdateID, objectKey)
+			if err == nil && cdn.PatchReady(r.Context(), location, record) {
+				rememberPatchRequest(r, req)
+				w.Header().Set("Cache-Control", "private, no-store")
+				w.Header().Set("Vary", "A-IM, Expo-Current-Update-ID, Expo-Requested-Update-ID, Accept-Encoding, prevent-cdn-redirection")
+				http.Redirect(w, r, location, http.StatusFound)
+				return true, "cdn_available"
+			}
+		}
+	}
+	patch, err := readPatchObject(*target, objectKey, int64(record.PatchBytes))
 	if err != nil || len(patch) != record.PatchBytes || bundlepatch.Hash(patch) != record.PatchHash {
 		return false, "invalid_patch"
 	}

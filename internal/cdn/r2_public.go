@@ -28,6 +28,11 @@ func (c *R2PublicCDN) ComputeRedirectionURLForAsset(branch, runtimeVersion, upda
 		keyPrefix += "/"
 	}
 	key := fmt.Sprintf("%s%s/%s/%s/%s", keyPrefix, branch, runtimeVersion, updateId, asset)
+	// A dedicated prefix allows a supported Cloudflare route ending in /*,
+	// without sending ordinary full bundles through the patch Worker.
+	if strings.HasPrefix(asset, "bundle-patches/") {
+		key = "_ota-patches/" + key
+	}
 	u := url.URL{Scheme: "https", Host: domain, Path: "/" + key}
 	return u.String(), nil
 }

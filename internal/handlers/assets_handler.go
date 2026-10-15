@@ -51,7 +51,7 @@ func AssetsHandler(w http.ResponseWriter, r *http.Request) {
 		w = observation
 		defer observation.observe(r, req)
 	}
-	// Negotiate patches before redirecting to a CDN that only stores full assets.
+	// Negotiate an exact patch before choosing the patch or full-bundle CDN URL.
 	served, reason := tryServeBundlePatch(w, r, req)
 	if observation, ok := w.(*bundleResponse); ok {
 		observation.reason = reason

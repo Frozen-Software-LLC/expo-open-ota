@@ -6,8 +6,45 @@ import (
 	"github.com/stretchr/testify/require"
 	"math/rand"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+func TestObjectKeyCompatibilityAndIsolation(t *testing.T) {
+	r := Record{Version: 2, Platform: "ios", BaseID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", PatchHash: strings.Repeat("a", 64)}
+	key, err := ObjectKey(r)
+	require.NoError(t, err)
+	require.Equal(t, "bundle-patches/ios/"+r.BaseID+"/"+r.PatchHash+".bsdiff", key)
+	for _, mutate := range []func(*Record){
+		func(r *Record) { r.Platform = "android" },
+		func(r *Record) { r.BaseID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" },
+		func(r *Record) { r.PatchHash = strings.Repeat("b", 64) },
+	} {
+		changed := r
+		mutate(&changed)
+		other, err := ObjectKey(changed)
+		require.NoError(t, err)
+		require.NotEqual(t, key, other)
+	}
+	for _, mutate := range []func(*Record){
+		func(r *Record) { r.Version = 3 },
+		func(r *Record) { r.Platform = "../ios" },
+		func(r *Record) { r.BaseID = "../base" },
+		func(r *Record) { r.PatchHash = strings.Repeat("A", 64) },
+		func(r *Record) { r.PatchHash = strings.Repeat("a", 62) },
+		func(r *Record) { r.PatchHash = "../../other" },
+	} {
+		invalid := r
+		mutate(&invalid)
+		_, err := ObjectKey(invalid)
+		require.Error(t, err)
+	}
+	r.Version = 1
+	r.PatchHash = ""
+	legacy, err := ObjectKey(r)
+	require.NoError(t, err)
+	require.Equal(t, "bundle-patches/ios/"+r.BaseID+".bsdiff", legacy)
+}
 
 func TestPrepareAndApply(t *testing.T) {
 	base := make([]byte, 32000)

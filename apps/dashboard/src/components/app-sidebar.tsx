@@ -10,7 +10,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar';
-import { Box, HardDriveDownload, PowerOff, Settings } from 'lucide-react';
+import { Activity, Box, HardDriveDownload, PowerOff, Settings } from 'lucide-react';
 import clsx from 'clsx';
 
 const items = [
@@ -23,6 +23,11 @@ const items = [
     title: 'Channels',
     url: '/channels',
     icon: Box,
+  },
+  {
+    title: 'Bundle metrics',
+    url: '/bundle-metrics',
+    icon: Activity,
   },
   {
     title: 'Settings',

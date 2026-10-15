@@ -91,6 +91,8 @@ func TestBundlePatchAssets(t *testing.T) {
 					require.Equal(t, target, w.Body.Bytes())
 				})
 			}
+			t.Run("cdn", func(t *testing.T) { testPatchCDN(t, record, patch, write, requestWithDevice) })
+			write(key+".json", recordJSON)
 			write(key+".bsdiff", []byte("corrupt"))
 			w = request(baseUUID, targetUUID, "bsdiff")
 			require.Equal(t, 200, w.Code)

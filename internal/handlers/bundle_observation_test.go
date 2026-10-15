@@ -72,9 +72,12 @@ func TestBundleResponseCorrelation(t *testing.T) {
 		w.observe(r, req)
 	}
 	observe(226, "available")
+	observe(302, "cdn_available")
 	observe(200, "not_negotiated")
 	observe(302, "not_negotiated")
 	require.EqualValues(t, 1, bundleMetric(t, "ota_bundle_responses_total", "patch", "available"))
+	require.EqualValues(t, 1, bundleMetric(t, "ota_bundle_responses_total", "patch_redirect", "cdn_available"))
+	require.EqualValues(t, 0, bundleMetric(t, "ota_bundle_response_bytes_total", "patch_redirect", "cdn_available"))
 	require.EqualValues(t, 1, bundleMetric(t, "ota_bundle_responses_total", "full", "full_after_patch"))
 	require.EqualValues(t, 1, bundleMetric(t, "ota_bundle_responses_total", "full_redirect", "full_after_patch"))
 	require.EqualValues(t, 4, bundleMetric(t, "ota_bundle_response_bytes_total", "patch", "available"))

@@ -1,0 +1,281 @@
+{
+  "scope": "Local loopback native protocol tests; real Worker code with filesystem R2 and in-memory Cache API adapters. Production HTTPS readiness/redirect selection covered separately by Go integration tests. No Cloudflare deployment or cache performance proof.",
+  "testDate": "2026-10-15",
+  "reloadEnabled": false,
+  "injectedTimeDelays": false,
+  "timingScope": "App launch command to ready bundle; includes app/emulator initialization, not the three-second OTA apply window. Explicit cold start verifies target launch.",
+  "platforms": {
+    "ios": [
+      {
+        "case": "cdn",
+        "launchToDownloadReadySeconds": 4.934,
+        "originRequests": [
+          {
+            "status": 302,
+            "bytes": 217,
+            "patchRequested": "bsdiff",
+            "encoding": ""
+          }
+        ],
+        "edgeRequests": [
+          {
+            "event": "edge",
+            "mode": "cdn",
+            "method": "GET",
+            "path": "/_ota-patches/local-diff/9090.1/1791200000000/bundle-patches/ios/0c7b7b40-ab3c-4790-86d8-5b6d36d406eb/a6c5c0f727aec5d600e39250ff3372ccb657aa0fe048d656330e208647574cc9.bsdiff",
+            "status": 200,
+            "bytes": 4854878,
+            "cache": "MISS",
+            "fallback": null,
+            "base": "0c7b7b40-ab3c-4790-86d8-5b6d36d406eb"
+          }
+        ],
+        "totalBundleBodyBytesExcludingRedirect": 4854878,
+        "targetSha256": "77285ace10af189e378e957c3c6c302dd2098b84bc9913e7192d7030ec9d0dde",
+        "successfulLaunches": 1,
+        "failedLaunches": 0
+      },
+      {
+        "case": "cdn-missing",
+        "launchToDownloadReadySeconds": 5.323,
+        "originRequests": [
+          {
+            "status": 302,
+            "bytes": 217,
+            "patchRequested": "bsdiff",
+            "encoding": ""
+          },
+          {
+            "status": 200,
+            "bytes": 9542363,
+            "patchRequested": "",
+            "encoding": "gzip"
+          }
+        ],
+        "edgeRequests": [
+          {
+            "event": "edge",
+            "mode": "cdn-missing",
+            "method": "GET",
+            "path": "/_ota-patches/local-diff/9090.1/1791200000000/bundle-patches/ios/0c7b7b40-ab3c-4790-86d8-5b6d36d406eb/a6c5c0f727aec5d600e39250ff3372ccb657aa0fe048d656330e208647574cc9.bsdiff",
+            "status": 200,
+            "bytes": 0,
+            "cache": null,
+            "fallback": "patch_missing",
+            "base": null
+          }
+        ],
+        "totalBundleBodyBytesExcludingRedirect": 9542363,
+        "targetSha256": "77285ace10af189e378e957c3c6c302dd2098b84bc9913e7192d7030ec9d0dde",
+        "successfulLaunches": 1,
+        "failedLaunches": 0
+      },
+      {
+        "case": "cdn-corrupt",
+        "launchToDownloadReadySeconds": 5.547,
+        "originRequests": [
+          {
+            "status": 302,
+            "bytes": 217,
+            "patchRequested": "bsdiff",
+            "encoding": ""
+          },
+          {
+            "status": 200,
+            "bytes": 9542363,
+            "patchRequested": "",
+            "encoding": "gzip"
+          }
+        ],
+        "edgeRequests": [
+          {
+            "event": "edge",
+            "mode": "cdn-corrupt",
+            "method": "GET",
+            "path": "/_ota-patches/local-diff/9090.1/1791200000000/bundle-patches/ios/0c7b7b40-ab3c-4790-86d8-5b6d36d406eb/a6c5c0f727aec5d600e39250ff3372ccb657aa0fe048d656330e208647574cc9.bsdiff",
+            "status": 200,
+            "bytes": 4854878,
+            "cache": "MISS",
+            "fallback": null,
+            "base": "0c7b7b40-ab3c-4790-86d8-5b6d36d406eb"
+          }
+        ],
+        "totalBundleBodyBytesExcludingRedirect": 14397241,
+        "targetSha256": "77285ace10af189e378e957c3c6c302dd2098b84bc9913e7192d7030ec9d0dde",
+        "successfulLaunches": 1,
+        "failedLaunches": 0
+      },
+      {
+        "case": "cdn-unavailable",
+        "launchToDownloadReadySeconds": 5.31,
+        "originRequests": [
+          {
+            "status": 302,
+            "bytes": 217,
+            "patchRequested": "bsdiff",
+            "encoding": ""
+          },
+          {
+            "status": 200,
+            "bytes": 9542363,
+            "patchRequested": "",
+            "encoding": "gzip"
+          }
+        ],
+        "edgeRequests": [
+          {
+            "event": "edge",
+            "mode": "cdn-unavailable",
+            "method": "GET",
+            "path": "/_ota-patches/local-diff/9090.1/1791200000000/bundle-patches/ios/0c7b7b40-ab3c-4790-86d8-5b6d36d406eb/a6c5c0f727aec5d600e39250ff3372ccb657aa0fe048d656330e208647574cc9.bsdiff",
+            "status": 200,
+            "bytes": 0,
+            "cache": null,
+            "fallback": "storage_unavailable",
+            "base": null
+          }
+        ],
+        "totalBundleBodyBytesExcludingRedirect": 9542363,
+        "targetSha256": "77285ace10af189e378e957c3c6c302dd2098b84bc9913e7192d7030ec9d0dde",
+        "successfulLaunches": 1,
+        "failedLaunches": 0
+      }
+    ],
+    "android": [
+      {
+        "case": "cdn",
+        "launchToDownloadReadySeconds": 9.775,
+        "originRequests": [
+          {
+            "status": 302,
+            "bytes": 221,
+            "patchRequested": "bsdiff",
+            "encoding": ""
+          }
+        ],
+        "edgeRequests": [
+          {
+            "event": "edge",
+            "mode": "cdn",
+            "method": "GET",
+            "path": "/_ota-patches/local-diff/9090.1/1791833461071/bundle-patches/android/4b479660-0f60-42ad-ab60-09ca69b39d9e/85bf8a7bfade74d796bb86da900bc4f63d5e7d53fe429063b8787080127d0db1.bsdiff",
+            "status": 200,
+            "bytes": 3636850,
+            "cache": "MISS",
+            "fallback": null,
+            "base": "4b479660-0f60-42ad-ab60-09ca69b39d9e"
+          }
+        ],
+        "totalBundleBodyBytesExcludingRedirect": 3636850,
+        "targetSha256": "a861b209c4b0de8f2cd606c830c3143d3658400d4103d7e01e6fda4e156de5b9",
+        "successfulLaunches": 1,
+        "failedLaunches": 0
+      },
+      {
+        "case": "cdn-missing",
+        "launchToDownloadReadySeconds": 8.065,
+        "originRequests": [
+          {
+            "status": 302,
+            "bytes": 221,
+            "patchRequested": "bsdiff",
+            "encoding": ""
+          },
+          {
+            "status": 200,
+            "bytes": 9640035,
+            "patchRequested": "",
+            "encoding": "gzip"
+          }
+        ],
+        "edgeRequests": [
+          {
+            "event": "edge",
+            "mode": "cdn-missing",
+            "method": "GET",
+            "path": "/_ota-patches/local-diff/9090.1/1791833461071/bundle-patches/android/4b479660-0f60-42ad-ab60-09ca69b39d9e/85bf8a7bfade74d796bb86da900bc4f63d5e7d53fe429063b8787080127d0db1.bsdiff",
+            "status": 200,
+            "bytes": 0,
+            "cache": null,
+            "fallback": "patch_missing",
+            "base": null
+          }
+        ],
+        "totalBundleBodyBytesExcludingRedirect": 9640035,
+        "targetSha256": "a861b209c4b0de8f2cd606c830c3143d3658400d4103d7e01e6fda4e156de5b9",
+        "successfulLaunches": 1,
+        "failedLaunches": 0
+      },
+      {
+        "case": "cdn-corrupt",
+        "launchToDownloadReadySeconds": 3.069,
+        "originRequests": [
+          {
+            "status": 302,
+            "bytes": 221,
+            "patchRequested": "bsdiff",
+            "encoding": ""
+          },
+          {
+            "status": 200,
+            "bytes": 9640035,
+            "patchRequested": "",
+            "encoding": "gzip"
+          }
+        ],
+        "edgeRequests": [
+          {
+            "event": "edge",
+            "mode": "cdn-corrupt",
+            "method": "GET",
+            "path": "/_ota-patches/local-diff/9090.1/1791833461071/bundle-patches/android/4b479660-0f60-42ad-ab60-09ca69b39d9e/85bf8a7bfade74d796bb86da900bc4f63d5e7d53fe429063b8787080127d0db1.bsdiff",
+            "status": 200,
+            "bytes": 3636850,
+            "cache": "MISS",
+            "fallback": null,
+            "base": "4b479660-0f60-42ad-ab60-09ca69b39d9e"
+          }
+        ],
+        "totalBundleBodyBytesExcludingRedirect": 13276885,
+        "targetSha256": "a861b209c4b0de8f2cd606c830c3143d3658400d4103d7e01e6fda4e156de5b9",
+        "successfulLaunches": 1,
+        "failedLaunches": 0
+      },
+      {
+        "case": "cdn-unavailable",
+        "launchToDownloadReadySeconds": 3.25,
+        "originRequests": [
+          {
+            "status": 302,
+            "bytes": 221,
+            "patchRequested": "bsdiff",
+            "encoding": ""
+          },
+          {
+            "status": 200,
+            "bytes": 9640035,
+            "patchRequested": "",
+            "encoding": "gzip"
+          }
+        ],
+        "edgeRequests": [
+          {
+            "event": "edge",
+            "mode": "cdn-unavailable",
+            "method": "GET",
+            "path": "/_ota-patches/local-diff/9090.1/1791833461071/bundle-patches/android/4b479660-0f60-42ad-ab60-09ca69b39d9e/85bf8a7bfade74d796bb86da900bc4f63d5e7d53fe429063b8787080127d0db1.bsdiff",
+            "status": 200,
+            "bytes": 0,
+            "cache": null,
+            "fallback": "storage_unavailable",
+            "base": null
+          }
+        ],
+        "totalBundleBodyBytesExcludingRedirect": 9640035,
+        "targetSha256": "a861b209c4b0de8f2cd606c830c3143d3658400d4103d7e01e6fda4e156de5b9",
+        "successfulLaunches": 1,
+        "failedLaunches": 0
+      }
+    ]
+  }
+}

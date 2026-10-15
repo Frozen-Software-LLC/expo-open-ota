@@ -1,0 +1,12 @@
+name = "dealseek-ota-patches-test"
+main = "src/index.mjs"
+compatibility_date = "2026-10-01"
+workers_dev = false
+
+# Copy to wrangler.local.toml and use an isolated bucket/hostname first.
+# Use a custom domain/route: the Cache API is not a workers.dev cache test.
+# routes = [{ pattern = "TEST_CDN_HOST/_ota-patches/*", zone_name = "YOUR_ZONE" }]
+
+[[r2_buckets]]
+binding = "OTA_BUCKET"
+bucket_name = "REPLACE_WITH_ISOLATED_TEST_BUCKET"

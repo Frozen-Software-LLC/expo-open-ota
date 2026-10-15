@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"expo-open-ota/internal/bundlepatch"
 	"expo-open-ota/internal/handlers"
 	"expo-open-ota/internal/metrics"
 	"expo-open-ota/internal/update"
@@ -12,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,9 +30,13 @@ type state struct {
 func main() {
 	root := flag.String("root", "", "Local fixture directory containing bucket/ and state.json")
 	finalize := flag.String("finalize-update", "", "Finalize a local fixture through the publication hook before serving")
+	patchEdge := flag.String("patch-edge", "", "Local protocol test only: redirect validated patches to http://127.0.0.1:9091")
 	flag.Parse()
 	if *root == "" {
 		log.Fatal("--root required")
+	}
+	if *patchEdge != "" && *patchEdge != "http://127.0.0.1:9091" {
+		log.Fatal("patch edge must be the isolated loopback test Worker")
 	}
 	os.Setenv("STORAGE_MODE", "local")
 	os.Setenv("CACHE_MODE", "local")
@@ -70,6 +76,21 @@ func main() {
 				r.Header.Del("A-IM")
 			}
 			handlers.AssetsHandler(rec, r)
+			// This transport fixture tests native redirect handling against the real
+			// Worker module. Production CDN selection/probing is covered separately
+			// by handler integration tests; this is not a Cloudflare cache benchmark.
+			if *patchEdge != "" && strings.HasPrefix(s.Mode, "cdn") && rec.Code == 226 {
+				query := r.URL.Query()
+				key := strings.Join([]string{query.Get("branch"), query.Get("runtimeVersion"), query.Get("updateId"), "bundle-patches", query.Get("platform"), rec.Header().Get("Expo-Base-Update-ID"), bundlepatch.Hash(rec.Body.Bytes()) + ".bsdiff"}, "/")
+				location, err := url.Parse(*patchEdge + "/_ota-patches/" + key)
+				if err != nil {
+					http.Error(w, "invalid local edge URL", 500)
+					return
+				}
+				rec = httptest.NewRecorder()
+				rec.Header().Set("Cache-Control", "no-store")
+				http.Redirect(rec, r, location.String(), http.StatusFound)
+			}
 			if s.Mode == "corrupt" && rec.Code == 226 && rec.Body.Len() > 40 {
 				rec.Body.Bytes()[40] ^= 255
 			}

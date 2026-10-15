@@ -14,7 +14,8 @@ Exact old bundle + exact new bundle
 
 Device requests pinned target asset
   -> supports bsdiff + known base + matching runtime/platform/target
-       -> valid patch available: HTTP 226 / IM: bsdiff
+       -> v2 patch + ready CDN: 302 -> edge 200 / IM: bsdiff
+       -> otherwise valid patch: API HTTP 226 / IM: bsdiff
        -> otherwise: existing full-asset/CDN response
   -> native client reconstructs + verifies the target manifest hash
        -> corrupt patch: retry the full bundle
@@ -45,7 +46,9 @@ updates and a two-minute process deadline covering storage and generation. Input
 are capped at 64 MiB each; `GOMEMLIMIT=768MiB` is a **soft GC target**, not an OS
 memory ceiling. Allocate container memory for both API and one worker before
 deploying. Multiple replicas may prepare the same deterministic artifact safely;
-readers verify the record and patch hash before serving it.
+direct readers verify the record and patch hash before serving it. CDN delivery
+uses immutable object URLs and a readiness check; native clients still verify
+the reconstructed target hash.
 
 The queue is best-effort, not durable. A full queue, timeout, missing helper,
 restart, unsuitable patch, or storage error leaves full downloads available.
@@ -77,8 +80,9 @@ go run ./cmd/prepare-bundle-patch \
   --output-dir /path/to/target-update-directory
 ```
 
-Output is `bundle-patches/PLATFORM/BASE_UUID.{json,bsdiff}` underneath that target
-update directory. The JSON records the exact identities, byte counts, and SHA-256
+Output is `bundle-patches/PLATFORM/BASE_UUID.json` and the immutable object
+`bundle-patches/PLATFORM/BASE_UUID/PATCH_SHA256.bsdiff` underneath that target
+update directory. The v2 JSON records the exact identities, byte counts, and SHA-256
 hashes. Preparation rejects empty/oversized inputs and non-beneficial patches.
 It verifies reconstructed output byte-for-byte before writing a patch. Generation
 runs offline rather than during the user's download; input bundles are limited to
@@ -97,11 +101,16 @@ Legacy unpinned URLs retain their old behavior. Validation is cached for 60 seco
 to avoid repeated object-storage reads for every asset. Manifest/asset cache keys
 are versioned so old cached unpinned URLs are not reused after deployment.
 
-Patch negotiation occurs before CDN redirection. Patches are private/no-store
-and vary by base, target, and supported encoding. Missing artifacts, malformed
-records, mismatched identities, unsupported clients, and disabled diffing fall
+Patch negotiation occurs before full-bundle CDN redirection. Direct patches and
+redirect decisions are private/no-store. New v2 patches can redirect to a ready
+CDN under a content-addressed URL; the edge response is publicly cacheable because
+base, target, runtime, platform, and content identity are in the URL. Missing artifacts, malformed
+records, mismatched identities, and unsupported clients fall
 back to the existing full-asset path. Images and other non-launch assets are not
 binary-diffed. The client still verifies the reconstructed target hash.
+
+See [patch CDN behavior and validation](../workers/ota-patches/README.md) for the
+Worker, readiness probe, fallback limits, and local iOS/Android protocol evidence.
 
 ## Local E2E harness
 
@@ -169,18 +178,20 @@ benchmarks remain pending.
 - Capture and retain exact embedded bundles from dashboard-started native builds
   for fresh-install patches; the current proof supplied them locally.
 - Review the three-base retention policy and provision worker memory headroom.
-- Verify deployed CDN/cache behavior, storage latency, physical devices, and real-network behavior.
-  Local Android E2E, including an explicitly throttled download, has passed.
-- Deploy the companion server changes separately from the DealSeek PR; leave the
-  server switch off until the concrete staged artifacts are verified.
+- Verify production CDN/cache configuration and physical-device/network behavior.
+  Isolated live Cloudflare verification passed on both simulators/emulators (see below);
+  this does not verify the production deployment.
+- Deploy the companion server changes separately from the DealSeek PR, only
+  after the concrete staged artifacts are verified. Diffing is enabled in code;
+  there is no server environment switch or installation allowlist.
 
 ## Tests
 
 `go test -race ./internal/bundlepatch ./internal/handlers ./internal/update` covers reconstruction,
-patch-size eligibility, negotiation, disabled/missing/invalid patch fallback,
+patch-size eligibility, negotiation, missing/invalid patch fallback,
 iOS/Android identity scoping, corrupted stored artifacts, and pinned target URLs
 surviving a later publication. Publication tests cover both platforms, base selection,
-queue bounds/deduplication, flag gating, repair, and idempotence. `go vet` passes for the changed packages/commands.
+queue bounds/deduplication, repair, and idempotence. `go vet` passes for the changed packages/commands.
 The full suite retains four asset/CDN tests that also fail on unmodified server
 main `5f4f6d7`; no additional failures remain after updating URL expectations.
 
@@ -235,11 +246,12 @@ Prometheus `/metrics` exposes two counters with bounded labels
 - `ota_bundle_responses_total`: exact launch-asset requests only, excluding images/fonts.
 - `ota_bundle_response_bytes_total`: actual body bytes written by this server.
 
-Deliveries: `patch` (HTTP 226), `full` (HTTP 200), `full_redirect` (HTTP 302 to CDN),
+Deliveries: `patch` (HTTP 226), `patch_redirect` (HTTP 302 to a ready patch CDN),
+`full` (HTTP 200), `full_redirect` (HTTP 302 to CDN),
 `write_error` (interrupted response), and `error` (other HTTP errors). Full reasons
 include `not_negotiated`, `patch_unavailable`,
 `invalid_base`, `invalid_target`, `unpinned`, `target_mismatch`, `invalid_record`,
-and `invalid_patch`. Patch responses use `available`.
+and `invalid_patch`. Direct patches use `available`; patch redirects use `cdn_available`.
 
 `full_after_patch` means the same installation/base/target/branch/runtime/platform/
 asset requested a full bundle without `A-IM` within ten minutes of a patch attempt.
@@ -253,8 +265,8 @@ optional telemetry reads/writes capped at 50 ms. Cache failure loses correlation
 but leaves download handling intact. Local cache mode uses a bounded 10,000-entry
 process-local tracker; restarts, capacity limits, and cross-replica retries can
 undercount. Shared Redis is recommended for multiple API replicas. CDN redirects
-count as full download decisions, but their transfer sizes/completion are unknown;
-redirect body bytes are not full bundle bytes. Failed metadata resolution cannot
+count as patch or full download decisions, but their transfer sizes/completion are unknown;
+all redirect body bytes are excluded from bundle-byte counters. Failed metadata resolution cannot
 identify a launch asset and is excluded from these bundle-only counters.
 
 Useful PromQL (select your service/job in a shared Prometheus deployment):
@@ -262,7 +274,7 @@ Useful PromQL (select your service/job in a shared Prometheus deployment):
 ```promql
 # Patch vs full responses / CDN redirects during the last day
 sum by (platform, delivery) (
-  increase(ota_bundle_responses_total{delivery=~"patch|full|full_redirect"}[24h])
+  increase(ota_bundle_responses_total{delivery=~"patch|patch_redirect|full|full_redirect"}[24h])
 )
 
 # Why full bundles were selected
@@ -284,6 +296,41 @@ sum by (platform, delivery) (
 The local harness exposes `/metrics` and uses the same default patch delivery as
 the server. Its optional `bytesPerSecond` state field caps launch-bundle bandwidth
 for slow-network testing; this is an explicit artificial network cap.
+
+## Built-in bundle metrics dashboard
+
+Open **Dashboard → Bundle metrics** (`/dashboard/bundle-metrics`). The page reads
+the authenticated `GET /api/bundle-metrics` endpoint and refreshes every 15 seconds
+while visible. It uses the existing in-process Prometheus counters directly;
+Grafana and a Prometheus server are not required.
+
+- Filter all platforms, iOS, or Android; unknown-platform traffic remains visible
+  in the all-platform totals and gets its own filter when present.
+- Patch share = `(direct patches + patch CDN redirects) / (patch + full responses)`.
+  HTTP and interrupted-write errors are shown separately, outside that denominator.
+- Full-after-patch requests are a subset of full responses, not an additional
+  delivery category or a confirmed native failure rate. The reasons table shows
+  each reason's percentage of full responses.
+- Direct bundle bytes exclude CDN transfers, redirect bodies, and interrupted
+  responses. The dashboard does not estimate bandwidth savings or CDN cache hits.
+- No traffic displays an empty state and an undefined patch share (`—`), not an
+  invented success rate. Failed refreshes retain the previous snapshot with a
+  warning; initial failures do not display zero counters.
+
+**Scope:** totals cover only the responding server process since startup. They
+reset on restart and do not aggregate across replicas. The endpoint includes an
+opaque process ID, start time, and sample time; the UI warns if a refresh comes
+from a different instance and replaces rather than adds its totals. There are no
+historical time windows, per-release breakdowns, or unique-device/install counts.
+Do not interpret load-balanced snapshots as a fleet-wide trend.
+
+Validation: authenticated/unauthenticated router tests, counter snapshot and
+concurrent-update race tests, and `npm run test:metrics` in `apps/dashboard` cover
+aggregation, filters, CDN byte exclusion, empty/error-only data, and unknown labels.
+The dashboard production build and focused ESLint checks pass. Browser checks
+cover loading, populated and empty states, platform filtering, initial errors,
+stale data after refresh errors, recovery, and server-instance changes. Browser
+preview counters are explicitly seeded local test data, not production telemetry.
 
 ## Historical installation allowlist verification (October 13, 2026)
 
@@ -309,3 +356,20 @@ Validation at the time: focused Go race tests and vet passed, including iOS/Andr
 handler coverage, the former allowlist fail-closed behavior, metric labels, retry identity/expiry,
 write failures, and Redis telemetry deadlines. The full Go suite still has the
 same four previously documented asset/CDN integration failures.
+
+## Live isolated Cloudflare verification
+
+On October 16, 2026 (Asia/Manila), the real patch Worker/R2 path passed six
+native cases: successful patch, missing-after-readiness fallback, and corrupt
+patch fallback on both an iOS simulator and Android emulator. Reconstructed
+bundle hashes and successful cold launches were checked. HTTP response body
+hashes, Expo patch headers, and Cloudflare cache HITs were also verified.
+
+The test used a separate bucket and hostname, a local OTA server, and existing
+isolated native builds. Full-bundle fallbacks stayed local; this was not a
+production rollout, physical-device test, or measurement of the three-second
+launch budget. The first Android corrupt-case attempt safely served a direct
+patch when readiness was not approved; a primed retry exercised the CDN failure.
+
+See [live Cloudflare evidence](evidence/bundle-cdn-cloudflare-validation.json) and
+[deployment setup](evidence/bundle-cdn-cloudflare-setup.json).

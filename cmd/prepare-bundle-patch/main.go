@@ -47,11 +47,17 @@ func main() {
 	}
 	key, _ := bundlepatch.Key(record.Platform, record.BaseID)
 	prefix := filepath.Join(*out, key)
-	if err = os.MkdirAll(filepath.Dir(prefix), 0755); err != nil {
+	record.Version = 2
+	objectKey, err := bundlepatch.ObjectKey(record)
+	if err != nil {
+		log.Fatal(err)
+	}
+	objectPath := filepath.Join(*out, objectKey)
+	if err = os.MkdirAll(filepath.Dir(objectPath), 0755); err != nil {
 		log.Fatal(err)
 	}
 	// Write the record last: an incomplete preparation cannot advertise a patch.
-	if err = os.WriteFile(prefix+".bsdiff", patch, 0644); err != nil {
+	if err = os.WriteFile(objectPath, patch, 0644); err != nil {
 		log.Fatal(err)
 	}
 	encoded, err := json.MarshalIndent(record, "", "  ")

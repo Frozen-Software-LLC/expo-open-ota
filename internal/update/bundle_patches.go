@@ -184,10 +184,13 @@ func PreparePublishedBundlePatches(target types.Update) error {
 		// must be regenerated, even if its bundle bytes happen to be identical.
 		raw, err := readPatchInput(storage, target, key+".json", 4096)
 		var prior bundlepatch.Record
-		if err == nil && json.Unmarshal(raw, &prior) == nil && prior.Version == 1 && prior.TargetID == targetMeta.UpdateUUID && prior.BaseID == baseMeta.UpdateUUID && prior.Runtime == target.RuntimeVersion && prior.Platform == targetMeta.Platform && prior.Asset == targetAsset && prior.TargetHash == bundlepatch.Hash(targetBytes) && prior.PatchBytes > 0 && prior.PatchBytes <= bundlepatch.MaxPatchBytes {
-			patch, err := readPatchInput(storage, target, key+".bsdiff", int64(prior.PatchBytes))
-			if err == nil && len(patch) == prior.PatchBytes && bundlepatch.Hash(patch) == prior.PatchHash {
-				continue
+		if err == nil && json.Unmarshal(raw, &prior) == nil && prior.Version == 2 && prior.TargetID == targetMeta.UpdateUUID && prior.BaseID == baseMeta.UpdateUUID && prior.Runtime == target.RuntimeVersion && prior.Platform == targetMeta.Platform && prior.Asset == targetAsset && prior.TargetHash == bundlepatch.Hash(targetBytes) && prior.PatchBytes > 0 && prior.PatchBytes <= bundlepatch.MaxPatchBytes {
+			objectKey, keyErr := bundlepatch.ObjectKey(prior)
+			if keyErr == nil {
+				patch, err := readPatchInput(storage, target, objectKey, int64(prior.PatchBytes))
+				if err == nil && len(patch) == prior.PatchBytes && bundlepatch.Hash(patch) == prior.PatchHash {
+					continue
+				}
 			}
 		}
 		baseBytes, err := readPatchInput(storage, base, baseAsset, bundlepatch.MaxBundleBytes)
@@ -201,7 +204,12 @@ func PreparePublishedBundlePatches(target types.Update) error {
 			continue
 		}
 		// Publish the record last. Incomplete writes cannot advertise a valid patch.
-		if err := storage.UploadFileIntoUpdate(target, key+".bsdiff", bytes.NewReader(patch)); err != nil {
+		record.Version = 2
+		objectKey, err := bundlepatch.ObjectKey(record)
+		if err != nil {
+			return err
+		}
+		if err := storage.UploadFileIntoUpdate(target, objectKey, bytes.NewReader(patch)); err != nil {
 			return err
 		}
 		raw, err = json.Marshal(record)

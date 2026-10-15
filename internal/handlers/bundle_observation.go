@@ -139,6 +139,8 @@ func (w *bundleResponse) observe(r *http.Request, req assets.AssetsRequest) {
 		delivery = "patch"
 	case w.status == http.StatusOK:
 		delivery = "full"
+	case w.status == http.StatusFound && w.reason == "cdn_available":
+		delivery = "patch_redirect"
 	case w.status == http.StatusFound:
 		delivery = "full_redirect"
 	}
@@ -150,5 +152,10 @@ func (w *bundleResponse) observe(r *http.Request, req assets.AssetsRequest) {
 			w.reason = "full_after_patch"
 		}
 	}
-	metrics.TrackBundleResponse(req.Platform, delivery, w.reason, w.bytes)
+	// A redirect body is not bundle traffic. CDN transfer bytes are unknown here.
+	transferred := w.bytes
+	if w.status == http.StatusFound {
+		transferred = 0
+	}
+	metrics.TrackBundleResponse(req.Platform, delivery, w.reason, transferred)
 }

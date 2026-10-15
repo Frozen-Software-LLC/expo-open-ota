@@ -1,4 +1,5 @@
 import { getRefreshToken, getToken, logout, setTokens } from '@/lib/auth.ts';
+import type { BundleSnapshot } from '@/lib/bundle-metrics';
 
 export class ApiClient {
   private baseUrl: string;
@@ -93,6 +94,9 @@ export class ApiClient {
     >('/api/channels', {
       method: 'GET',
     });
+  }
+  public getBundleMetrics(signal?: AbortSignal) {
+    return this.request<BundleSnapshot>('/api/bundle-metrics', { signal });
   }
   public async getBranches() {
     return this.request<

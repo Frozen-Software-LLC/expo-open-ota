@@ -1,0 +1,213 @@
+{
+  "date": "2026-10-16",
+  "timezone": "Asia/Manila",
+  "scope": "Real deployed Cloudflare Worker/R2/CDN with local OTA server, iOS simulator and Android emulator. No production OTA publication or routing change.",
+  "worker": "dealseek-ota-patches-test-20261016",
+  "workerSourceSha256": "e7cbabf21fb14b95b9f0621424dd00c5e18c8a6009a0587e3a903384a70b723b",
+  "bucket": "dealseek-ota-patch-test-20261016",
+  "hostname": "ota-patch-test-20261016.dealseek.com",
+  "testPrefix": "proof-20261016/",
+  "cache": {
+    "bothPlatformsHit": true,
+    "headDidNotPopulateGetCache": true,
+    "bodyHashAndExpoHeadersVerified": true,
+    "note": "Requests reached both MNL and CGY; cache is location-specific. See raw edge-proof.json and edge-first-attempt.json."
+  },
+  "fixtures": {
+    "ios": {
+      "patchBytes": 4854878,
+      "gzipFullBytes": 9542363
+    },
+    "android": {
+      "patchBytes": 3636850,
+      "gzipFullBytes": 9640035
+    }
+  },
+  "nativeCases": [
+    {
+      "platform": "ios",
+      "case": "cdn",
+      "passed": true,
+      "apiStatuses": [
+        302
+      ],
+      "targetSha256": "77285ace10af189e378e957c3c6c302dd2098b84bc9913e7192d7030ec9d0dde",
+      "successfulLaunches": 1,
+      "failedLaunches": 0,
+      "launchToDownloadReadySeconds": 4.975,
+      "localFullBundleBytes": 0
+    },
+    {
+      "platform": "ios",
+      "case": "cdn-missing",
+      "passed": true,
+      "apiStatuses": [
+        302,
+        200
+      ],
+      "targetSha256": "77285ace10af189e378e957c3c6c302dd2098b84bc9913e7192d7030ec9d0dde",
+      "successfulLaunches": 1,
+      "failedLaunches": 0,
+      "launchToDownloadReadySeconds": 2.267,
+      "localFullBundleBytes": 9542363
+    },
+    {
+      "platform": "ios",
+      "case": "cdn-corrupt",
+      "passed": true,
+      "apiStatuses": [
+        302,
+        200
+      ],
+      "targetSha256": "77285ace10af189e378e957c3c6c302dd2098b84bc9913e7192d7030ec9d0dde",
+      "successfulLaunches": 1,
+      "failedLaunches": 0,
+      "launchToDownloadReadySeconds": 3.204,
+      "localFullBundleBytes": 9542363
+    },
+    {
+      "platform": "android",
+      "case": "cdn",
+      "passed": true,
+      "apiStatuses": [
+        302
+      ],
+      "targetSha256": "a861b209c4b0de8f2cd606c830c3143d3658400d4103d7e01e6fda4e156de5b9",
+      "successfulLaunches": 1,
+      "failedLaunches": 0,
+      "launchToDownloadReadySeconds": 2.87,
+      "localFullBundleBytes": 0
+    },
+    {
+      "platform": "android",
+      "case": "cdn-missing",
+      "passed": true,
+      "apiStatuses": [
+        302,
+        200
+      ],
+      "targetSha256": "a861b209c4b0de8f2cd606c830c3143d3658400d4103d7e01e6fda4e156de5b9",
+      "successfulLaunches": 1,
+      "failedLaunches": 0,
+      "launchToDownloadReadySeconds": 5.624,
+      "localFullBundleBytes": 9640035
+    },
+    {
+      "platform": "android",
+      "case": "cdn-corrupt",
+      "passed": true,
+      "apiStatuses": [
+        302,
+        200
+      ],
+      "targetSha256": "a861b209c4b0de8f2cd606c830c3143d3658400d4103d7e01e6fda4e156de5b9",
+      "successfulLaunches": 1,
+      "failedLaunches": 0,
+      "launchToDownloadReadySeconds": 4.465,
+      "localFullBundleBytes": 9640035
+    }
+  ],
+  "additionalObservation": "First Android corrupt-case attempt served a valid direct 226 patch when CDN readiness was not approved (520 ms asset request, consistent with 500 ms probe timeout). A separately primed retry verified the real corrupt-CDN fallback.",
+  "method": "A dedicated ignored Go harness initializes fixture storage locally and the production R2 CDN provider for the isolated hostname. Production AssetsHandler and PatchReady perform actual HTTPS probes and redirects. Full bundles/assets remain served locally. Missing-case probes were primed while R2 objects existed, then only those two test objects were deleted before native requests. Corrupt fixtures have a deliberately flipped byte and separate test prefixes.",
+  "limitations": [
+    "These are simulator/emulator tests, not physical-device tests.",
+    "Reload flag OFF; target application was verified by explicit cold start. This does not measure the three-second launch-update budget.",
+    "No artificial time delays or bandwidth caps; missing/corrupt failures were deliberately injected.",
+    "Sample timings include app startup and are not performance benchmarks.",
+    "CDN payload bytes were measured by independent HTTP downloads; native CDN wire bytes/cache hits are not directly instrumented.",
+    "DNS/TLS failures after readiness and live R2 service errors were not injected.",
+    "Automatic publication and native embedded-baseline capture were not tested in this run."
+  ],
+  "cleanup": {
+    "temporaryUploader": "Worker, route and local token deleted",
+    "testWorkerAndBucket": "Retained for further isolated tests",
+    "productionChanges": false
+  },
+  "rawEvidenceDirectory": "/Users/kashi/Downloads/DEV-9212-cloudflare-proof",
+  "edgeSamples": [
+    {
+      "platform": "ios",
+      "samples": [
+        {
+          "method": "HEAD",
+          "status": 200,
+          "cache": "MISS",
+          "colo": "CEB",
+          "contentLength": "4854878",
+          "im": "bsdiff",
+          "baseId": "0c7b7b40-ab3c-4790-86d8-5b6d36d406eb",
+          "patchHash": "a6c5c0f727aec5d600e39250ff3372ccb657aa0fe048d656330e208647574cc9",
+          "bodyBytes": 0,
+          "bodySha256": null,
+          "seconds": 0.828
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "cache": "HIT",
+          "colo": "",
+          "contentLength": "4854878",
+          "im": "bsdiff",
+          "baseId": "0c7b7b40-ab3c-4790-86d8-5b6d36d406eb",
+          "patchHash": "a6c5c0f727aec5d600e39250ff3372ccb657aa0fe048d656330e208647574cc9",
+          "bodyBytes": 4854878,
+          "bodySha256": "a6c5c0f727aec5d600e39250ff3372ccb657aa0fe048d656330e208647574cc9",
+          "seconds": 0.709
+        }
+      ]
+    },
+    {
+      "platform": "android",
+      "samples": [
+        {
+          "method": "HEAD",
+          "status": 200,
+          "cache": "HIT",
+          "colo": "",
+          "contentLength": "3636850",
+          "im": "bsdiff",
+          "baseId": "4b479660-0f60-42ad-ab60-09ca69b39d9e",
+          "patchHash": "85bf8a7bfade74d796bb86da900bc4f63d5e7d53fe429063b8787080127d0db1",
+          "bodyBytes": 0,
+          "bodySha256": null,
+          "seconds": 0.105
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "cache": "HIT",
+          "colo": "",
+          "contentLength": "3636850",
+          "im": "bsdiff",
+          "baseId": "4b479660-0f60-42ad-ab60-09ca69b39d9e",
+          "patchHash": "85bf8a7bfade74d796bb86da900bc4f63d5e7d53fe429063b8787080127d0db1",
+          "bodyBytes": 3636850,
+          "bodySha256": "85bf8a7bfade74d796bb86da900bc4f63d5e7d53fe429063b8787080127d0db1",
+          "seconds": 0.419
+        }
+      ]
+    }
+  ],
+  "readinessDirectFallback": {
+    "scope": "First Android corrupt-case attempt did not reach CDN; direct validated patch served after readiness was not approved. Elapsed request time is consistent with 500ms probe timeout.",
+    "request": {
+      "asset": "_expo/static/js/android/entry-d51cd9f6f6a6482dd8021a4ba4dd4473.hbc",
+      "base": "4b479660-0f60-42ad-ab60-09ca69b39d9e",
+      "bytes": 3636850,
+      "encoding": "",
+      "event": "asset",
+      "location": "",
+      "ms": 520.389,
+      "patchRequested": "bsdiff",
+      "platform": "android",
+      "status": 226,
+      "target": "e1089075-6db4-6ec4-8ab3-78506769767a"
+    },
+    "targetRow": [
+      "E10890756DB46EC48AB378506769767A",
+      1,
+      1,
+      0
+    ]
+  }
+}
