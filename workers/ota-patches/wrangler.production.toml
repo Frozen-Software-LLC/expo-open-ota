@@ -1,0 +1,12 @@
+name = "dealseek-ota-patches-production"
+main = "src/index.mjs"
+account_id = "362f57aef63aa9da244dd1c1739c9620"
+compatibility_date = "2026-10-01"
+workers_dev = false
+preview_urls = false
+
+routes = [{ pattern = "ota-assets.dealseek.com/_ota-patches/*", zone_name = "dealseek.com" }]
+
+[[r2_buckets]]
+binding = "OTA_BUCKET"
+bucket_name = "dealseek-expo-updates"

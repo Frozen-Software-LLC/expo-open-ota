@@ -56,6 +56,33 @@ downloads. Redirects contribute zero bundle bytes to the API byte counter.
 Worker traffic and cache hits need separate edge telemetry; do not interpret API
 byte counters as total CDN traffic or confirmed device installations.
 
+## Production deployment
+
+The production Worker was deployed on October 16, 2026 (Asia/Manila), using the
+same Worker source tested on the isolated hostname:
+
+- Worker: `dealseek-ota-patches-production`
+- Route: `ota-assets.dealseek.com/_ota-patches/*`
+- R2 binding: `OTA_BUCKET` → `dealseek-expo-updates`
+- Route ID: `2bef9571330d4cce8cf4ff46e5604035`
+- Deployment ID: `b9e792caf8cb42e8948671c56b051695`
+- `workers.dev` and preview URLs are disabled.
+
+`wrangler.production.toml` records the bucket and route for future deployments.
+Deploying the OTA API remains a separate operation; merging this PR does not
+automatically deploy the Worker. Ordinary asset paths stay on the existing R2 CDN.
+The route can be removed independently to undo this configuration; API readiness
+checks then select direct patch delivery after any cached readiness expires.
+
+Production smoke checks verified HEAD metadata, GET byte/hash integrity, MISS → HIT,
+missing-object fallback responses, and invalid-path rejection using a unique
+48-byte probe under `_worker-verification/`, never advertised by an OTA manifest.
+An existing full-bundle HEAD stayed HTTP 200 with the same ETag and content length.
+The probe was removed from R2. Exact-URL cache purge returned an authentication
+error, so its unreferenced cached copy may remain until edge eviction/expiry.
+These checks verify routing, binding and cache behavior, not real patch application
+on a phone or the automated R2 publishing flow.
+
 ## Isolated Cloudflare validation
 
 An account operator needs R2 bucket/object access and Workers script/route access.
