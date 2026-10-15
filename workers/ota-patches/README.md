@@ -91,8 +91,7 @@ available for further tests.
 
 Real HTTPS patch responses and cache HITs were verified for both platforms.
 Requests can reach different Cloudflare data centers, so a repeat request is not
-necessarily a HIT at a different location. Native results and test scope are in
-[the live validation evidence](../../docs/evidence/bundle-cdn-cloudflare-validation.json).
+necessarily a HIT at a different location.
 
 ## Local verification
 
@@ -104,20 +103,17 @@ go test -race ./internal/bundlepatch ./internal/cdn ./internal/handlers ./intern
 For native protocol tests, `test/local-edge.mjs` executes this exact Worker module
 using filesystem R2 and in-memory cache adapters. Copy isolated OTA fixtures into
 a new root; keep the original proof fixtures unchanged. The root needs `bucket/`,
-`state.json`, and the simulator/APK fixture files used by the runners. Create the
-content-addressed object copies described in each patch's validation record.
+`state.json`, and isolated simulator/APK builds. Create the content-addressed
+object copies described in each patch's validation record.
 
 ```sh
 node workers/ota-patches/test/local-edge.mjs FIXTURE_ROOT > FIXTURE_ROOT/edge.log 2>&1
 go run ./cmd/local-bundle-diff --root FIXTURE_ROOT --patch-edge http://127.0.0.1:9091 > FIXTURE_ROOT/server.log 2>&1
-python3 scripts/local-bundle-diff-proof.py --root FIXTURE_ROOT --device SIMULATOR_UUID --cases cdn,cdn-missing,cdn-corrupt,cdn-unavailable
-python3 scripts/local-bundle-cdn-android-proof.py --root FIXTURE_ROOT --device emulator-5580
 ```
 
-Run iOS and Android sequentially because they share `state.json`. The dedicated
-emulator must be `DealSeek_OTA_Combined`; the iOS runner requires a disposable
-`DealSeek DEV-9212…` simulator. Both binaries must target runtime `9090.1` and the
-loopback server. The Android runner reverses ports 9090 and 9091.
+Run iOS and Android sequentially because they share `state.json`. Use disposable
+simulators/emulators and binaries targeting runtime `9090.1` and the loopback
+server. For Android, reverse ports 9090 and 9091 with `adb reverse`.
 
 The local harness redirects an already validated direct patch to this adapter.
 It tests actual native redirect handling, Worker response behavior, reconstruction,
@@ -134,8 +130,6 @@ valid iOS patch was 4,854,878 bytes versus 9,542,363 full gzip bytes; Android wa
 body before full retry. Corruption incurred both the patch and full bundle bytes,
 as expected. No artificial time delays or bandwidth caps were used; missing,
 storage-error, and corrupt data were deliberately injected failure cases.
-
-Sanitized results: [bundle-cdn-local.json](../../docs/evidence/bundle-cdn-local.json).
 
 Validation also passed the focused Go race suite above, `go vet` for the changed
 packages/commands, `go build ./...`, all five Worker tests, and an offline CLI

@@ -110,9 +110,9 @@ cached here. A patch published after a cached miss can take up to 60 seconds
 to become eligible (the full-bundle path remains available). Cache keys include
 branch, runtime, storage update ID and object path.
 
-[Measured cache, native delivery and cost checks](evidence/bundle-cache-cost-validation.json)
-show zero bucket reads for warm patch redirects. Remaining findings include a
-duplicate metadata reads during validation refresh/cold API bursts, concurrent cold Worker requests
+Measured cache, native delivery and cost checks show zero bucket reads for warm
+patch redirects. Remaining findings include duplicate metadata reads during
+validation refresh/cold API bursts, concurrent cold Worker requests
 reading R2 independently, and no native full retry for a raw HTTP 429 received
 after a redirect. A Worker-generated fallback signal is different from an edge
 error that occurs before the Worker executes. The latter leaves the existing
@@ -138,17 +138,9 @@ construction, this repository's production asset handler, and real native Expo
 patch application. Local feature flags and deliberately corrupted response bytes
 are test fixtures; they never alter production flags or stored artifacts.
 
-With a copied isolated test binary (`DealSeek.app`) and `fixture.json` describing
-its prepared target in that root, run:
-
-```sh
-python3 scripts/local-bundle-diff-proof.py --root /path/to/fixture-root --device SIMULATOR_UUID
-```
-
-The runner only accepts a simulator named `DealSeek DEV-9212…` and a binary pinned
-to the loopback server and isolated runtime. It reinstalls that test app, tests full,
-patch, and corrupted-patch paths, verifies stored hashes and successful cold launches,
-and saves per-case evidence. It waits for native initialization before querying SQLite.
+Use a disposable simulator/emulator and an isolated native build pinned to the
+loopback server and runtime. Exercise full, patch, and corrupted-patch paths,
+then verify stored bundle hashes and successful cold launches.
 
 `state.json` selects a local storage update ID using `target`, a local flag using
 `reloadEnabled`, and `mode` (`normal`, `full`, or `corrupt`). An empty target returns
@@ -231,12 +223,6 @@ for the fresh full/patch pair and 1.545s / 1.118s for the existing pair. A final
 corrupt-patch retry took 2.405s. These individual loopback runs are evidence of
 actual execution, **not production performance benchmarks**. Earlier observations
 above illustrate run-to-run variability. Byte counts are stable across runs.
-
-Sanitized measurements and HTTP evidence are in
-[`evidence/bundle-diffing-ios.json`](evidence/bundle-diffing-ios.json).
-The recording runner is `scripts/record-bundle-diff.py`; its `--save-fresh` and
-`--save-existing` modes save baselines from the disposable simulator, then
-`--scenario fresh|existing --mode full|normal` records and validates each run.
 
 ## Default patch delivery and download observability
 
@@ -367,7 +353,6 @@ No synthetic check/download delays were added:
 Every case matched the target bundle SHA-256 and completed a successful cold
 launch with zero failed launches. The native app and its reload flag were unchanged;
 all configuration and fault injection were isolated to the loopback test server.
-Sanitized HTTP/metric evidence: [bundle-rollout-android.json](evidence/bundle-rollout-android.json).
 
 Validation at the time: focused Go race tests and vet passed, including iOS/Android
 handler coverage, the former allowlist fail-closed behavior, metric labels, retry identity/expiry,
@@ -387,6 +372,3 @@ isolated native builds. Full-bundle fallbacks stayed local; this was not a
 production rollout, physical-device test, or measurement of the three-second
 launch budget. The first Android corrupt-case attempt safely served a direct
 patch when readiness was not approved; a primed retry exercised the CDN failure.
-
-See [live Cloudflare evidence](evidence/bundle-cdn-cloudflare-validation.json) and
-[deployment setup](evidence/bundle-cdn-cloudflare-setup.json).
