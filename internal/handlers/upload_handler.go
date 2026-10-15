@@ -97,6 +97,7 @@ func MarkUpdateAsUploadedHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if checked {
+		update.QueueBundlePatches(*currentUpdate)
 		w.WriteHeader(http.StatusOK)
 		return
 	}

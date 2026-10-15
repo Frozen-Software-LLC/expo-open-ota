@@ -5,9 +5,11 @@ import (
 	"expo-open-ota/internal/metrics"
 	"expo-open-ota/internal/migration"
 	infrastructure "expo-open-ota/internal/router"
+	"expo-open-ota/internal/update"
 	"github.com/gorilla/handlers"
 	"log"
 	"net/http"
+	"os"
 )
 
 import (
@@ -20,6 +22,12 @@ func init() {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--prepare-update-patches" {
+		if err := update.RunPatchPreparationCommand(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	migration.RunMigrationsWithLock()
 	router := infrastructure.NewRouter()
 	log.Println("Server is running on port " + config.GetPort())

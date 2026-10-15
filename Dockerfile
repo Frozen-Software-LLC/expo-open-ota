@@ -16,11 +16,13 @@ COPY keys ./keys
 COPY config ./config
 COPY updates ./updates
 RUN GOOS=linux GOARCH=${TARGETARCH} go build -o main ./cmd/api
+RUN GOOS=linux GOARCH=${TARGETARCH} go build -o prepare-update-patches ./cmd/prepare-update-patches
 
 FROM alpine:latest
 RUN apk add --no-cache bash
 WORKDIR /app
 COPY --from=builder /app/main /app/main
+COPY --from=builder /app/prepare-update-patches /app/prepare-update-patches
 COPY --from=dashboard-builder /app/apps/dashboard/dist /app/apps/dashboard/dist
 EXPOSE 3000
 CMD ["/app/main"]

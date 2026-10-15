@@ -3,7 +3,6 @@ package bucket
 import (
 	"bufio"
 	"errors"
-	"strings"
 	"expo-open-ota/config"
 	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/types"
@@ -18,6 +17,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -273,7 +273,7 @@ func (b *LocalBucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdateId
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == "update-metadata.json" || name == ".check" {
+		if skipRepublishObject(name) {
 			continue
 		}
 

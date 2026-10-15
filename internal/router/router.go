@@ -96,6 +96,7 @@ func NewRouter() *mux.Router {
 
 	authSubrouter := r.PathPrefix("/api").Subrouter()
 	authSubrouter.Use(middleware.AuthMiddleware)
+	authSubrouter.HandleFunc("/bundle-metrics", handlers.GetBundleMetricsHandler).Methods(http.MethodGet)
 	authSubrouter.HandleFunc("/settings", handlers.GetSettingsHandler).Methods(http.MethodGet)
 	authSubrouter.HandleFunc("/branches", handlers.GetBranchesHandler).Methods(http.MethodGet)
 	authSubrouter.HandleFunc("/channels", handlers.GetChannelsHandler).Methods(http.MethodGet)

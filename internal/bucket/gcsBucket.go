@@ -282,7 +282,7 @@ func (b *GCSBucket) CreateUpdateFrom(previousUpdate *types.Update, newUpdateId s
             continue
         }
         relPath := strings.TrimPrefix(attrs.Name, sourcePrefix)
-        if relPath == "update-metadata.json" || relPath == ".check" || strings.HasSuffix(relPath, "/") {
+        if skipRepublishObject(relPath) || strings.HasSuffix(relPath, "/") {
             continue
         }
         src := attrs.Name

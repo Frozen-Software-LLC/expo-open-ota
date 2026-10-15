@@ -99,8 +99,9 @@ func MarkUpdateAsChecked(update types.Update) error {
 	if err := resolvedBucket.UploadFileIntoUpdate(update, ".check", reader); err != nil {
 		return err
 	}
-	go PreWarmManifestCache(update.Branch, update.RuntimeVersion, "ios")
-	go PreWarmManifestCache(update.Branch, update.RuntimeVersion, "android")
+	QueueBundlePatches(update)
+	queueManifestPreWarm(update.Branch, update.RuntimeVersion, "ios")
+	queueManifestPreWarm(update.Branch, update.RuntimeVersion, "android")
 	return nil
 }
 
@@ -131,11 +132,11 @@ func ComputeMetadataCacheKey(branch string, runtimeVersion string, updateId stri
 }
 
 func ComputeUpdataManifestCacheKey(branch string, runtimeVersion string, updateId string, platform string) string {
-	return fmt.Sprintf("manifest:%s:%s:%s:%s:%s", version.Version, branch, runtimeVersion, updateId, platform)
+	return fmt.Sprintf("manifest-pinned-v1:%s:%s:%s:%s:%s", version.Version, branch, runtimeVersion, updateId, platform)
 }
 
 func ComputeManifestAssetCacheKey(update types.Update, assetPath string) string {
-	return fmt.Sprintf("asset:%s:%s:%s:%s:%s", version.Version, update.Branch, update.RuntimeVersion, update.UpdateId, assetPath)
+	return fmt.Sprintf("asset-pinned-v1:%s:%s:%s:%s:%s", version.Version, update.Branch, update.RuntimeVersion, update.UpdateId, assetPath)
 }
 
 func VerifyUploadedUpdate(update types.Update) error {
@@ -476,6 +477,14 @@ func shapeManifestAsset(update types.Update, asset *types.Asset, isLaunchAsset b
 	if errUrl != nil {
 		return types.ManifestAsset{}, errUrl
 	}
+	parsedAssetURL, err := url.Parse(finalUrl)
+	if err != nil {
+		return types.ManifestAsset{}, err
+	}
+	assetQuery := parsedAssetURL.Query()
+	assetQuery.Set("updateId", update.UpdateId)
+	parsedAssetURL.RawQuery = assetQuery.Encode()
+	finalUrl = parsedAssetURL.String()
 	manifestAsset := types.ManifestAsset{
 		Hash:          urlEncodedHash,
 		Key:           key,

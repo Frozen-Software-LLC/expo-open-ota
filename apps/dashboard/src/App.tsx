@@ -8,6 +8,7 @@ import { Updates } from '@/pages/Updates';
 import { Settings } from '@/pages/Settings';
 import { Logout } from '@/pages/Logout';
 import { Channels } from '@/pages/Channels';
+import { BundleMetrics } from '@/pages/BundleMetrics';
 
 function withLayout(children: ReactNode) {
   return <Layout>{children}</Layout>;
@@ -31,6 +32,7 @@ export const App = () => {
         <Route path="/" element={withLayout(<Updates />)} />
         <Route path="/settings" element={withLayout(<Settings />)} />
         <Route path="/channels" element={withLayout(<Channels />)} />
+        <Route path="/bundle-metrics" element={withLayout(<BundleMetrics />)} />
         <Route path="/logout" element={withLayout(<Logout />)} />
       </Routes>
     </>

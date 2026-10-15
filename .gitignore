@@ -36,6 +36,7 @@ vendor/
 
 # Node.js specific files (if the project includes frontend code)
 node_modules/
+apps/dashboard/.metrics-tests/
 
 # Build directories
 bin/
