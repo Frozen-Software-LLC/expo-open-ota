@@ -30,8 +30,6 @@ func TestBundlePatchAssets(t *testing.T) {
 			t.Setenv("STORAGE_MODE", "local")
 			t.Setenv("LOCAL_BUCKET_BASE_PATH", root)
 			t.Setenv("BASE_URL", "http://localhost:9090")
-			t.Setenv("OTA_BUNDLE_DIFFING_ENABLED", "true")
-			t.Setenv("OTA_BUNDLE_DIFFING_ROLLOUT", "all")
 			t.Setenv("CDN_TYPE", "")
 			bucket.ResetBucketInstance()
 			require.NoError(t, cache.GetCache().Clear())
@@ -59,32 +57,33 @@ func TestBundlePatchAssets(t *testing.T) {
 			recordJSON, _ := json.Marshal(record)
 			write(key+".json", recordJSON)
 			write(key+".bsdiff", patch)
-			request := func(baseID, requestedID, aim string) *httptest.ResponseRecorder {
+			requestWithDevice := func(baseID, requestedID, aim, installationID string) *httptest.ResponseRecorder {
 				t.Helper()
 				r := httptest.NewRequest("GET", "/assets?branch=local-diff&runtimeVersion=9090.1&updateId=1700000000000&platform="+platform+"&asset=bundle.hbc", nil)
 				r.Header.Set("Expo-Current-Update-ID", baseID)
 				r.Header.Set("Expo-Requested-Update-ID", requestedID)
 				r.Header.Set("A-IM", aim)
-				r.Header.Set("EAS-Client-ID", "dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+				r.Header.Set("EAS-Client-ID", installationID)
 				w := httptest.NewRecorder()
 				AssetsHandler(w, r)
 				return w
 			}
-			t.Setenv("OTA_BUNDLE_DIFFING_ROLLOUT", "allowlist")
-			t.Setenv("OTA_BUNDLE_DIFFING_DEVICE_IDS", "")
-			denied := request(baseUUID, targetUUID, "bsdiff")
-			require.Equal(t, 200, denied.Code)
-			require.Equal(t, "private, no-store", denied.Header().Get("Cache-Control"))
-			require.Contains(t, denied.Header().Get("Vary"), "EAS-Client-ID")
-			require.EqualValues(t, 1, bundleMetric(t, "ota_bundle_responses_total", "full", "device_not_allowed"))
-			t.Setenv("OTA_BUNDLE_DIFFING_DEVICE_IDS", "dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+			request := func(baseID, requestedID, aim string) *httptest.ResponseRecorder {
+				return requestWithDevice(baseID, requestedID, aim, "")
+			}
+			// No environment configuration or installation ID is needed for patches.
 			w := request(baseUUID, targetUUID, "bsdiff")
 			require.Equal(t, 226, w.Code, w.Body.String())
-			require.Contains(t, w.Header().Get("Vary"), "EAS-Client-ID")
+			require.NotContains(t, w.Header().Get("Vary"), "EAS-Client-ID")
 			require.EqualValues(t, 1, bundleMetric(t, "ota_bundle_responses_total", "patch", "available"))
 			actual, err := bspatch.Bytes(base, w.Body.Bytes())
 			require.NoError(t, err)
 			require.Equal(t, target, actual)
+			for _, id := range []string{"invalid", "dddddddd-dddd-4ddd-8ddd-dddddddddddd", "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"} {
+				w := requestWithDevice(baseUUID, targetUUID, "bsdiff", id)
+				require.Equal(t, 226, w.Code)
+				require.Equal(t, patch, w.Body.Bytes())
+			}
 			for _, tc := range []struct{ name, base, target, aim string }{{"legacy", baseUUID, targetUUID, ""}, {"missing-base", "", targetUUID, "bsdiff"}, {"unknown-base", "cccccccc-cccc-4ccc-8ccc-cccccccccccc", targetUUID, "bsdiff"}, {"wrong-target", baseUUID, baseUUID, "bsdiff"}, {"unsupported", baseUUID, targetUUID, "other"}} {
 				t.Run(tc.name, func(t *testing.T) {
 					w := request(tc.base, tc.target, tc.aim)
@@ -92,12 +91,6 @@ func TestBundlePatchAssets(t *testing.T) {
 					require.Equal(t, target, w.Body.Bytes())
 				})
 			}
-			t.Setenv("OTA_BUNDLE_DIFFING_ENABLED", "false")
-			w = request(baseUUID, targetUUID, "bsdiff")
-			require.Equal(t, 200, w.Code)
-			require.Equal(t, target, w.Body.Bytes())
-			t.Setenv("OTA_BUNDLE_DIFFING_ENABLED", "true")
-			t.Setenv("OTA_BUNDLE_DIFFING_ROLLOUT", "all")
 			write(key+".bsdiff", []byte("corrupt"))
 			w = request(baseUUID, targetUUID, "bsdiff")
 			require.Equal(t, 200, w.Code)

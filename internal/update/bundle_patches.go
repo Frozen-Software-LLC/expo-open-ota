@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"expo-open-ota/config"
 	"expo-open-ota/internal/bucket"
 	"expo-open-ota/internal/bundlepatch"
 	"expo-open-ota/internal/types"
@@ -68,10 +67,9 @@ var publicationPatches struct {
 	queue *patchQueue
 }
 
+// Every finalized update queues patch preparation; clients fall back to full
+// bundles until a compatible, verified patch is available.
 func QueueBundlePatches(target types.Update) {
-	if config.GetEnv("OTA_BUNDLE_DIFFING_ENABLED") != "true" {
-		return
-	}
 	publicationPatches.Do(func() { publicationPatches.queue = newPatchQueue(runPatchJob, 16) })
 	if !publicationPatches.queue.enqueue(target) {
 		log.Printf("[bundle-diff] queue full; full bundle remains available for %s/%s/%s", target.Branch, target.RuntimeVersion, target.UpdateId)

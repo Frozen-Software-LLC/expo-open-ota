@@ -20,12 +20,13 @@ import (
 )
 
 func TestPublicationPreparesCompatiblePatches(t *testing.T) {
+	// Exercise preparation synchronously below without spawning helper processes.
+	usePublicationQueue(t, func(types.Update) {})
 	for _, platform := range []string{"ios", "android"} {
 		t.Run(platform, func(t *testing.T) {
 			root := t.TempDir()
 			t.Setenv("STORAGE_MODE", "local")
 			t.Setenv("LOCAL_BUCKET_BASE_PATH", root)
-			t.Setenv("OTA_BUNDLE_DIFFING_ENABLED", "false")
 			bucket.ResetBucketInstance()
 			t.Cleanup(bucket.ResetBucketInstance)
 			t.Cleanup(preWarmTasks.Wait)
@@ -112,7 +113,7 @@ func TestPatchQueueBoundsAndDeduplicates(t *testing.T) {
 	require.Equal(t, second, <-started)
 }
 
-func TestFinalizationQueuesOnlyWhenEnabled(t *testing.T) {
+func TestFinalizationQueuesPatchesByDefault(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("STORAGE_MODE", "local")
 	t.Setenv("LOCAL_BUCKET_BASE_PATH", root)
@@ -121,24 +122,12 @@ func TestFinalizationQueuesOnlyWhenEnabled(t *testing.T) {
 	t.Cleanup(preWarmTasks.Wait)
 	require.NoError(t, cache.GetCache().Clear())
 	jobs := make(chan types.Update, 2)
-	q := newPatchQueue(func(u types.Update) { jobs <- u }, 2)
-	publicationPatches.queue = q
-	publicationPatches.Once = sync.Once{}
-	publicationPatches.Do(func() {})
-	t.Cleanup(func() { close(q.jobs); publicationPatches.queue = nil; publicationPatches.Once = sync.Once{} })
+	usePublicationQueue(t, func(u types.Update) { jobs <- u })
 	target, err := GetUpdate("queue-test", "1", "1700000000000")
 	require.NoError(t, err)
 	for name, value := range map[string]string{"update-metadata.json": `{"platform":"ios"}`, "metadata.json": `{"fileMetadata":{"ios":{"bundle":"bundle.hbc"}}}`, "bundle.hbc": "bundle", "expoConfig.json": "{}"} {
 		require.NoError(t, bucket.GetBucket().UploadFileIntoUpdate(*target, name, bytes.NewBufferString(value)))
 	}
-	t.Setenv("OTA_BUNDLE_DIFFING_ENABLED", "false")
-	require.NoError(t, MarkUpdateAsChecked(*target))
-	select {
-	case <-jobs:
-		t.Fatal("disabled flag queued a job")
-	default:
-	}
-	t.Setenv("OTA_BUNDLE_DIFFING_ENABLED", "true")
 	require.NoError(t, MarkUpdateAsChecked(*target))
 	select {
 	case got := <-jobs:
@@ -147,4 +136,18 @@ func TestFinalizationQueuesOnlyWhenEnabled(t *testing.T) {
 		t.Fatal("finalization did not enqueue")
 	}
 	require.True(t, IsUpdateValid(*target))
+}
+
+// Replace only the background executor; keep the production finalization path.
+func usePublicationQueue(t *testing.T, run func(types.Update)) {
+	t.Helper()
+	q := newPatchQueue(run, 32)
+	publicationPatches.queue = q
+	publicationPatches.Once = sync.Once{}
+	publicationPatches.Do(func() {})
+	t.Cleanup(func() {
+		close(q.jobs)
+		publicationPatches.queue = nil
+		publicationPatches.Once = sync.Once{}
+	})
 }

@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"expo-open-ota/config"
 	"expo-open-ota/internal/assets"
 	"expo-open-ota/internal/bucket"
 	"expo-open-ota/internal/bundlepatch"
@@ -16,12 +15,6 @@ import (
 // Only precomputed, validated launch-asset patches are served. Missing or
 // invalid artifacts fall through to the ordinary full asset/CDN response.
 func tryServeBundlePatch(w http.ResponseWriter, r *http.Request, req assets.AssetsRequest) (bool, string) {
-	if config.GetEnv("OTA_BUNDLE_DIFFING_ENABLED") != "true" {
-		return false, "disabled"
-	}
-	if !bundlepatch.DeviceEligible(r) {
-		return false, "device_not_allowed"
-	}
 	if !bundlepatch.AcceptsPatch(r) {
 		return false, "not_negotiated"
 	}

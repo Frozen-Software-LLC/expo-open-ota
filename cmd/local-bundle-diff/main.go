@@ -36,7 +36,6 @@ func main() {
 	os.Setenv("CACHE_MODE", "local")
 	os.Setenv("LOCAL_BUCKET_BASE_PATH", filepath.Join(*root, "bucket"))
 	os.Setenv("BASE_URL", "http://127.0.0.1:9090")
-	os.Setenv("OTA_BUNDLE_DIFFING_ENABLED", "true")
 	if *finalize != "" {
 		if err := update.ValidatePatchJobPath("local-diff", "9090.1", *finalize); err != nil {
 			log.Fatal(err)

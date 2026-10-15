@@ -98,14 +98,14 @@ You can set these variables in a `.env` file for local development or in your de
 | `USE_DASHBOARD` | ❌ | Enable the dashboard | `true` | [Ref](/docs/dashboard) |
 | `ADMIN_PASSWORD` | ✅ if USE_DASHBOARD is set | Admin password | `Random string` | [Ref](/docs/dashboard) |
 
-### OTA bundle patch rollout
+### OTA bundle patches
 
-| Name | Default | Description |
-| --- | --- | --- |
-| `OTA_BUNDLE_DIFFING_ENABLED` | `false` | Enable offline patch generation and permit eligible patch serving. Global kill switch. |
-| `OTA_BUNDLE_DIFFING_ROLLOUT` | `allowlist` | `allowlist` restricts patches to selected installations; `all` explicitly enables broad serving. Unknown values deny patch serving. |
-| `OTA_BUNDLE_DIFFING_DEVICE_IDS` | empty | Comma-separated Expo `EAS-Client-ID` installation UUIDs. Empty means no devices receive patches in allowlist mode. |
+Patch generation and serving are enabled in code for every compatible client;
+no bundle-diffing environment variables or installation allowlist are required.
+The server prepares patches after publication and serves one only when the client
+supports BSDIFF and a validated, smaller patch matches its base and target bundles.
+Otherwise, the existing full-bundle download is used.
 
-Unselected installations continue downloading full bundles. These server controls
-are independent of client-side reload behavior. Patch and full response counts
-are available in `ota_bundle_responses_total` on the Prometheus metrics endpoint.
+This is independent of client-side reload behavior and does not change channel or
+runtime selection. Patch and full response counts remain available in
+`ota_bundle_responses_total` on the Prometheus metrics endpoint.

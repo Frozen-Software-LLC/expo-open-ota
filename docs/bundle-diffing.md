@@ -1,8 +1,10 @@
 # Bundle diffing (DEV-9212)
 
 This implementation serves precomputed BSDIFF40 patches for Expo launch assets.
-It is disabled unless `OTA_BUNDLE_DIFFING_ENABLED=true`. No production service,
-channel, OTA, or native store release has been changed.
+Patch preparation and serving are enabled by default in code for all compatible
+clients. No environment switch or device allowlist is required. Deploying this
+server version enables that behavior; it does not change which updates each
+channel/runtime/platform receives.
 
 ```text
 Exact old bundle + exact new bundle
@@ -42,7 +44,7 @@ binary. One helper runs at a time per server process, with a queue of 16 waiting
 updates and a two-minute process deadline covering storage and generation. Inputs
 are capped at 64 MiB each; `GOMEMLIMIT=768MiB` is a **soft GC target**, not an OS
 memory ceiling. Allocate container memory for both API and one worker before
-enabling. Multiple replicas may prepare the same deterministic artifact safely;
+deploying. Multiple replicas may prepare the same deterministic artifact safely;
 readers verify the record and patch hash before serving it.
 
 The queue is best-effort, not durable. A full queue, timeout, missing helper,
@@ -208,34 +210,24 @@ The recording runner is `scripts/record-bundle-diff.py`; its `--save-fresh` and
 `--save-existing` modes save baselines from the disposable simulator, then
 `--scenario fresh|existing --mode full|normal` records and validates each run.
 
-## Internal rollout and download observability
+## Default patch delivery and download observability
 
-Patch generation remains controlled by `OTA_BUNDLE_DIFFING_ENABLED=true`.
-Serving now also requires an eligible installation. Default/unset rollout mode
-is `allowlist`, with an empty list denying patches to everyone:
+Every finalized update queues patch preparation automatically. Every client that
+negotiates BSDIFF and has a matching base/runtime/platform/target is eligible for
+a verified patch. There is no device UUID allowlist or server environment switch.
+Missing, invalid or insufficiently smaller patches use the full bundle; legacy
+clients that do not negotiate BSDIFF keep receiving full bundles.
 
-```sh
-OTA_BUNDLE_DIFFING_ENABLED=true
-OTA_BUNDLE_DIFFING_ROLLOUT=allowlist
-OTA_BUNDLE_DIFFING_DEVICE_IDS=INSTALLATION_UUID_1,INSTALLATION_UUID_2
-```
+Channel selection remains unchanged: preview apps receive the selected preview
+channel's compatible updates, and production apps receive production updates.
+Patches can be served on both. The app's `ota-reload-enabled` flag still controls
+**when to apply** an update, independently of patch delivery.
 
-Use the UUID from Expo's `EAS-Client-ID` asset/manifest request header. It is an
-**installation ID**, not a PostHog distinct ID, account ID, hardware ID or push token.
-The native Expo client sends it on iOS and Android, including initial downloads
-before JavaScript/PostHog initializes. `expo-eas-client` also exports `clientID`
-for an internal debug console. The local harness logs it in asset events; obtain
-an internal tester's ID from their debug session or a controlled request capture.
-Do not log all production installation IDs or put them in metric labels.
-Reinstallation/data clearing may require enrolling a new ID. This is a rollout
-control, not an authentication boundary: client-supplied IDs can be spoofed.
-
-Unlisted/missing/invalid IDs receive ordinary full bundles. Invalid rollout modes
-fail closed. Explicit `OTA_BUNDLE_DIFFING_ROLLOUT=all` allows broad rollout later;
-setting `OTA_BUNDLE_DIFFING_ENABLED=false` is the global kill switch. These are
-server environment settings, requiring a server restart/deployment. They are
-independent of the app's `ota-reload-enabled` flag, which controls **when to apply**
-an update. No new app build is required for compatible Expo clients.
+Expo's `EAS-Client-ID` is used only to correlate patch attempts with later full
+requests. It does not authorize patch downloads: missing or malformed installation
+IDs can still receive patches, but cannot contribute to correlated retry counts.
+The correlation key hashes the identifiers together; do not put raw production
+installation IDs in logs or metric labels.
 
 Prometheus `/metrics` exposes two counters with bounded labels
 `platform`, `delivery`, `reason`:
@@ -245,7 +237,7 @@ Prometheus `/metrics` exposes two counters with bounded labels
 
 Deliveries: `patch` (HTTP 226), `full` (HTTP 200), `full_redirect` (HTTP 302 to CDN),
 `write_error` (interrupted response), and `error` (other HTTP errors). Full reasons
-include `disabled`, `device_not_allowed`, `not_negotiated`, `patch_unavailable`,
+include `not_negotiated`, `patch_unavailable`,
 `invalid_base`, `invalid_target`, `unpinned`, `target_mismatch`, `invalid_record`,
 and `invalid_patch`. Patch responses use `available`.
 
@@ -273,7 +265,7 @@ sum by (platform, delivery) (
   increase(ota_bundle_responses_total{delivery=~"patch|full|full_redirect"}[24h])
 )
 
-# Why full bundles were selected (separates rollout exclusions from fallbacks)
+# Why full bundles were selected
 sum by (platform, reason) (
   increase(ota_bundle_responses_total{delivery=~"full|full_redirect"}[24h])
 )
@@ -289,13 +281,14 @@ sum by (platform, delivery) (
 )
 ```
 
-The local harness exposes `/metrics` as well. Unlike its earlier unconditional
-patch delivery, it now obeys the same allowlist default; set explicit `all` for
-legacy full-vs-patch fixture scripts, or enroll the simulator installation to test
-internal rollout. Its optional `bytesPerSecond` state field caps launch-bundle
-bandwidth for slow-network testing; this is an explicit artificial network cap.
+The local harness exposes `/metrics` and uses the same default patch delivery as
+the server. Its optional `bytesPerSecond` state field caps launch-bundle bandwidth
+for slow-network testing; this is an explicit artificial network cap.
 
-## Installation allowlist verification (October 13, 2026)
+## Historical installation allowlist verification (October 13, 2026)
+
+These measurements cover the earlier allowlist implementation, which has since
+been removed. They remain historical evidence, not current setup instructions.
 
 The Android release-mode app was tested against the local server with the same
 real Expo installation UUID preserved while resetting its OTA cache between cases.
@@ -312,7 +305,7 @@ launch with zero failed launches. The native app and its reload flag were unchan
 all configuration and fault injection were isolated to the loopback test server.
 Sanitized HTTP/metric evidence: [bundle-rollout-android.json](evidence/bundle-rollout-android.json).
 
-Validation: focused Go race tests and vet pass, including iOS/Android handler
-coverage, allowlist fail-closed behavior, metric labels, retry identity/expiry,
+Validation at the time: focused Go race tests and vet passed, including iOS/Android
+handler coverage, the former allowlist fail-closed behavior, metric labels, retry identity/expiry,
 write failures, and Redis telemetry deadlines. The full Go suite still has the
 same four previously documented asset/CDN integration failures.
