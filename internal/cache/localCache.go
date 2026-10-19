@@ -28,8 +28,11 @@ func NewLocalCache() *LocalCache {
 }
 
 func (c *LocalCache) Get(key string) string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	// Get also deletes expired entries. Keep lookup and expiration under the
+	// same exclusive lock so concurrent readers cannot mutate the map or
+	// delete a value that another request has just refreshed.
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	item, exists := c.items[withPrefix(key)]
 	if !exists {

@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func testPatchCDN(t *testing.T, record bundlepatch.Record, patch []byte, write func(string, []byte), request func(string, string, string, string) *httptest.ResponseRecorder) {
+func testPatchCDN(t *testing.T, record bundlepatch.Record, patch, base, target []byte, write func(string, []byte), request func(string, string, string, string) *httptest.ResponseRecorder) {
 	t.Helper()
 	record.Version = 2
 	key, err := bundlepatch.ObjectKey(record)
@@ -26,6 +26,10 @@ func testPatchCDN(t *testing.T, record bundlepatch.Record, patch []byte, write f
 	write(metadataKey+".json", encoded)
 	var probes atomic.Int32
 	edge := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/local-diff/9090.1/1700000000000/bundle.hbc" {
+			_, _ = w.Write(target)
+			return
+		}
 		if r.URL.Path != "/_ota-patches/local-diff/9090.1/1700000000000/"+key {
 			t.Errorf("unexpected CDN path: %s", r.URL.Path)
 			w.WriteHeader(404)
@@ -108,4 +112,13 @@ func testPatchCDN(t *testing.T, record bundlepatch.Record, patch []byte, write f
 	legacy := request(baseUUID, targetUUID, "bsdiff", "")
 	require.Equal(t, 226, legacy.Code)
 	require.Equal(t, patch, legacy.Body.Bytes())
+	// Exercise real HTTP requests and local TLS CDN redirects after all the
+	// single-request counter assertions above have completed.
+	record.Version = 2
+	encoded, err = json.Marshal(record)
+	require.NoError(t, err)
+	write(metadataKey+".json", encoded)
+	t.Run("concurrent-cdn", func(t *testing.T) {
+		testConcurrentBundleDelivery(t, record.Platform, base, target, patch, edge.Client())
+	})
 }
