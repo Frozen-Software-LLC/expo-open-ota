@@ -1,6 +1,8 @@
 package update
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -100,5 +102,69 @@ func TestLatestUpdateScanDuringPublishDoesNotCache(t *testing.T) {
 	}
 	if cached := cache2.GetCache().Get(cacheKey); cached != "" {
 		t.Fatalf("stale scan cached %s", cached)
+	}
+}
+
+// A stuck scan must not block callers forever, and the next call must start
+// a new scan instead of joining the stuck one.
+func TestLatestUpdateScanTimeoutStartsNewScan(t *testing.T) {
+	t.Setenv("STORAGE_MODE", "local")
+	t.Setenv("LOCAL_BUCKET_BASE_PATH", "../../test/test-updates")
+	bucket.ResetBucketInstance()
+	t.Cleanup(bucket.ResetBucketInstance)
+
+	cache2.GetCache().Delete(ComputeLastUpdateCacheKey("branch-2", "1", "ios"))
+	latestUpdateScanTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { latestUpdateScanTimeout = 30 * time.Second })
+	release, stuckDone := make(chan struct{}), make(chan struct{})
+	var scans atomic.Int32
+	scanLatestUpdateFunc = func(branch, runtimeVersion, platform string) (*types.Update, error) {
+		if scans.Add(1) == 1 {
+			defer close(stuckDone)
+			<-release
+		}
+		return scanLatestUpdate(branch, runtimeVersion, platform)
+	}
+	t.Cleanup(func() { scanLatestUpdateFunc = scanLatestUpdate })
+	// Let the stuck scan end before the next test changes the bucket.
+	defer func() { close(release); <-stuckDone }()
+
+	if _, err := GetLatestUpdateBundlePathForRuntimeVersion("branch-2", "1", "ios"); err == nil {
+		t.Fatal("stuck scan: want timeout error")
+	}
+	latest, err := GetLatestUpdateBundlePathForRuntimeVersion("branch-2", "1", "ios")
+	if err != nil || latest == nil {
+		t.Fatalf("second call: got %v, %v", latest, err)
+	}
+	if n := scans.Load(); n != 2 {
+		t.Fatalf("%d scans, want 2", n)
+	}
+}
+
+// An update whose metadata cannot be read must fail the scan, not fall
+// through to an older update.
+func TestLatestUpdateScanReturnsReadErrors(t *testing.T) {
+	base := t.TempDir()
+	older := filepath.Join(base, "b", "1", "100")
+	if err := os.MkdirAll(older, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(older, "update-metadata.json"), []byte(`{"platform":"ios"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(older, ".check"), []byte(".check"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A directory makes the metadata read fail.
+	if err := os.MkdirAll(filepath.Join(base, "b", "1", "200", "update-metadata.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("STORAGE_MODE", "local")
+	t.Setenv("LOCAL_BUCKET_BASE_PATH", base)
+	bucket.ResetBucketInstance()
+	t.Cleanup(bucket.ResetBucketInstance)
+
+	if latest, err := scanLatestUpdate("b", "1", "ios"); err == nil {
+		t.Fatalf("got %v, want read error", latest)
 	}
 }
