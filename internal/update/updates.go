@@ -351,6 +351,9 @@ func GetUpdateType(update types.Update) types.UpdateType {
 		return types.NormalUpdate
 	}
 	ttl := updateTypeCacheTTLSeconds
+	// Read .check first: a rollback that is still being written has no marker
+	// yet, and only a marker read after .check exists is final.
+	checked := IsUpdateValid(update)
 	resolvedBucket := bucket.GetBucket()
 	file, err := resolvedBucket.GetFile(update, "rollback")
 	if file != nil {
@@ -358,9 +361,7 @@ func GetUpdateType(update types.Update) types.UpdateType {
 		_ = cache.Set(cacheKey, "rollback", &ttl)
 		return types.Rollback
 	}
-	// A rollback that is still being written has no marker yet, so only a
-	// checked update is known to be normal.
-	if err == nil && IsUpdateValid(update) {
+	if err == nil && checked {
 		_ = cache.Set(cacheKey, "normal", &ttl)
 	}
 	return types.NormalUpdate
