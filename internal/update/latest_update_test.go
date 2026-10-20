@@ -2,10 +2,13 @@ package update
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"expo-open-ota/internal/bucket"
 	cache2 "expo-open-ota/internal/cache"
+	"expo-open-ota/internal/types"
 )
 
 // The short-circuit scan must pick the same update as the full filter, also
@@ -33,6 +36,14 @@ func TestLatestUpdateScanMatchesFullFilterUnderConcurrency(t *testing.T) {
 		}
 
 		cache2.GetCache().Delete(ComputeLastUpdateCacheKey("branch-2", "1", platform))
+		// Hold the scan open so that all callers miss the cache while it runs.
+		var scans atomic.Int32
+		scanLatestUpdateFunc = func(branch, runtimeVersion, platform string) (*types.Update, error) {
+			scans.Add(1)
+			time.Sleep(200 * time.Millisecond)
+			return scanLatestUpdate(branch, runtimeVersion, platform)
+		}
+		t.Cleanup(func() { scanLatestUpdateFunc = scanLatestUpdate })
 		var wg sync.WaitGroup
 		got := make([]string, 32)
 		for i := range got {
@@ -51,5 +62,43 @@ func TestLatestUpdateScanMatchesFullFilterUnderConcurrency(t *testing.T) {
 				t.Fatalf("%s call %d: got %q, want %q", platform, i, id, want)
 			}
 		}
+		if n := scans.Load(); n != 1 {
+			t.Fatalf("%s: %d storage scans, want 1", platform, n)
+		}
+	}
+}
+
+// A scan that started before a publish must not cache its older result.
+func TestLatestUpdateScanDuringPublishDoesNotCache(t *testing.T) {
+	t.Setenv("STORAGE_MODE", "local")
+	t.Setenv("LOCAL_BUCKET_BASE_PATH", "../../test/test-updates")
+	bucket.ResetBucketInstance()
+	t.Cleanup(bucket.ResetBucketInstance)
+
+	cacheKey := ComputeLastUpdateCacheKey("branch-2", "1", "ios")
+	cache2.GetCache().Delete(cacheKey)
+	entered, release := make(chan struct{}), make(chan struct{})
+	scanLatestUpdateFunc = func(branch, runtimeVersion, platform string) (*types.Update, error) {
+		close(entered)
+		<-release
+		return scanLatestUpdate(branch, runtimeVersion, platform)
+	}
+	t.Cleanup(func() { scanLatestUpdateFunc = scanLatestUpdate })
+
+	done := make(chan *types.Update)
+	go func() {
+		latest, _ := GetLatestUpdateBundlePathForRuntimeVersion("branch-2", "1", "ios")
+		done <- latest
+	}()
+	<-entered
+	// What MarkUpdateAsChecked does after it writes .check.
+	latestUpdateGeneration.Add(1)
+	cache2.GetCache().Delete(cacheKey)
+	close(release)
+	if <-done == nil {
+		t.Fatal("scan found no update")
+	}
+	if cached := cache2.GetCache().Get(cacheKey); cached != "" {
+		t.Fatalf("stale scan cached %s", cached)
 	}
 }

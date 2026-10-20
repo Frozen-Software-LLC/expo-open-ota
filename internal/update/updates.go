@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -101,13 +102,11 @@ func MarkUpdateAsChecked(update types.Update) error {
 	if err := resolvedBucket.UploadFileIntoUpdate(update, ".check", reader); err != nil {
 		return err
 	}
-	// A scan that ran before .check existed can have cached the previous update,
-	// and new requests must not join it. Clear both now that .check is visible.
-	// ponytail: a scan still in flight can re-cache the old update for its TTL;
-	// add a publish generation to the key if that window matters.
-	lastUpdateCacheKey := ComputeLastUpdateCacheKey(update.Branch, update.RuntimeVersion, storedMetadata.Platform)
-	cache.Delete(lastUpdateCacheKey)
-	latestUpdateFlight.Forget(lastUpdateCacheKey)
+	// A scan that ran before .check existed can have cached the previous update.
+	// Advance the generation before the delete, so a scan still in flight drops
+	// its write and new requests start a new scan.
+	latestUpdateGeneration.Add(1)
+	cache.Delete(ComputeLastUpdateCacheKey(update.Branch, update.RuntimeVersion, storedMetadata.Platform))
 	QueueBundlePatches(update)
 	queueManifestPreWarm(update.Branch, update.RuntimeVersion, "ios")
 	queueManifestPreWarm(update.Branch, update.RuntimeVersion, "android")
@@ -258,8 +257,30 @@ func GetLatestUpdateBundlePathForRuntimeVersion(branch string, runtimeVersion st
 
 	// A publish deletes this key, so every polling device misses at once. One scan
 	// runs per key; the rest wait for its result instead of each scanning the bucket.
-	result, err, _ := latestUpdateFlight.Do(cacheKey, func() (interface{}, error) {
-		return scanLatestUpdate(branch, runtimeVersion, platform, cacheKey)
+	// The flight key holds the publish generation, so a request made after a
+	// publish never joins a scan that started before it.
+	generation := latestUpdateGeneration.Load()
+	result, err, _ := latestUpdateFlight.Do(fmt.Sprintf("%s:%d", cacheKey, generation), func() (interface{}, error) {
+		// A caller that missed just before the previous flight filled the cache.
+		if cachedValue := cache.Get(cacheKey); cachedValue != "" {
+			var update types.Update
+			if err := json.Unmarshal([]byte(cachedValue), &update); err == nil {
+				return &update, nil
+			}
+		}
+		latest, err := scanLatestUpdateFunc(branch, runtimeVersion, platform)
+		if err != nil || latest == nil {
+			return latest, err
+		}
+		if cacheValue, err := json.Marshal(latest); err == nil {
+			ttl := 1800
+			_ = cache.Set(cacheKey, string(cacheValue), &ttl)
+			// A publish during the scan already deleted the key; drop this stale write.
+			if latestUpdateGeneration.Load() != generation {
+				cache.Delete(cacheKey)
+			}
+		}
+		return latest, nil
 	})
 	if err != nil {
 		return nil, err
@@ -272,10 +293,15 @@ func GetLatestUpdateBundlePathForRuntimeVersion(branch string, runtimeVersion st
 	return &latestCopy, nil
 }
 
-var latestUpdateFlight singleflight.Group
+var (
+	latestUpdateFlight singleflight.Group
+	// Incremented by every publish. ponytail: process-local, so with a shared
+	// cache a scan on another replica can still re-cache the old update.
+	latestUpdateGeneration atomic.Uint64
+	scanLatestUpdateFunc   = scanLatestUpdate
+)
 
-func scanLatestUpdate(branch string, runtimeVersion string, platform string, cacheKey string) (*types.Update, error) {
-	cache := cache2.GetCache()
+func scanLatestUpdate(branch string, runtimeVersion string, platform string) (*types.Update, error) {
 	// List the runtime's updates (the bucket derives CreatedAt from the updateId, so
 	// we can sort newest-first WITHOUT reading any per-update metadata) and scan once,
 	// reading update-metadata.json + .check only until the first update that matches
@@ -300,12 +326,6 @@ func scanLatestUpdate(branch string, runtimeVersion string, platform string, cac
 			continue
 		}
 		latest := updates[i]
-		cacheValue, marshalErr := json.Marshal(latest)
-		if marshalErr != nil {
-			return &latest, nil
-		}
-		ttl := 1800
-		_ = cache.Set(cacheKey, string(cacheValue), &ttl)
 		return &latest, nil
 	}
 	return nil, nil
