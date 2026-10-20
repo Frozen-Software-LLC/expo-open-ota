@@ -13,8 +13,13 @@ import (
 )
 
 func TestLoggingMiddlewareRecordsHTTPMetrics(t *testing.T) {
+	oldRegisterer, oldGatherer := prometheus.DefaultRegisterer, prometheus.DefaultGatherer
 	reg := prometheus.NewRegistry()
 	prometheus.DefaultRegisterer, prometheus.DefaultGatherer = reg, reg
+	t.Cleanup(func() {
+		metrics.CleanupMetrics()
+		prometheus.DefaultRegisterer, prometheus.DefaultGatherer = oldRegisterer, oldGatherer
+	})
 	metrics.ResetMetricsForTest()
 	metrics.InitMetrics()
 
@@ -22,6 +27,10 @@ func TestLoggingMiddlewareRecordsHTTPMetrics(t *testing.T) {
 	r.Use(LoggingMiddleware)
 	r.HandleFunc("/ok", func(w http.ResponseWriter, _ *http.Request) {})
 	r.HandleFunc("/boom", func(http.ResponseWriter, *http.Request) { panic("boom") })
+	r.HandleFunc("/partial", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("started"))
+		panic("boom after write")
+	})
 	api := r.PathPrefix("/api").Subrouter()
 	api.HandleFunc("/branch/{BRANCH}", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -31,6 +40,7 @@ func TestLoggingMiddlewareRecordsHTTPMetrics(t *testing.T) {
 		httptest.NewRequest(http.MethodGet, "/api/branch/a", nil),
 		httptest.NewRequest(http.MethodGet, "/api/branch/b", nil),
 		httptest.NewRequest(http.MethodGet, "/boom", nil),
+		httptest.NewRequest(http.MethodGet, "/partial", nil),
 		httptest.NewRequest("WEIRD", "/ok", nil),
 	} {
 		r.ServeHTTP(httptest.NewRecorder(), req)
@@ -42,6 +52,7 @@ func TestLoggingMiddlewareRecordsHTTPMetrics(t *testing.T) {
 	for _, want := range []string{
 		`ota_http_request_duration_seconds_count{code="404",method="GET",route="/api/branch/{BRANCH}"} 2`,
 		`ota_http_request_duration_seconds_count{code="500",method="GET",route="/boom"} 1`,
+		`ota_http_request_duration_seconds_count{code="500",method="GET",route="/partial"} 1`,
 		`ota_http_request_duration_seconds_count{code="200",method="OTHER",route="/ok"} 1`,
 		`ota_http_requests_in_flight 0`,
 	} {
