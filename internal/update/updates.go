@@ -101,6 +101,13 @@ func MarkUpdateAsChecked(update types.Update) error {
 	if err := resolvedBucket.UploadFileIntoUpdate(update, ".check", reader); err != nil {
 		return err
 	}
+	// A scan that ran before .check existed can have cached the previous update,
+	// and new requests must not join it. Clear both now that .check is visible.
+	// ponytail: a scan still in flight can re-cache the old update for its TTL;
+	// add a publish generation to the key if that window matters.
+	lastUpdateCacheKey := ComputeLastUpdateCacheKey(update.Branch, update.RuntimeVersion, storedMetadata.Platform)
+	cache.Delete(lastUpdateCacheKey)
+	latestUpdateFlight.Forget(lastUpdateCacheKey)
 	QueueBundlePatches(update)
 	queueManifestPreWarm(update.Branch, update.RuntimeVersion, "ios")
 	queueManifestPreWarm(update.Branch, update.RuntimeVersion, "android")

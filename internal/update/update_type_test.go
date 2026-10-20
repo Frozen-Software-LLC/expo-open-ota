@@ -3,7 +3,9 @@ package update
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	"expo-open-ota/internal/bucket"
 	"expo-open-ota/internal/types"
@@ -18,7 +20,8 @@ func TestGetUpdateTypeCachesOnlySettledTypes(t *testing.T) {
 	bucket.ResetBucketInstance()
 	t.Cleanup(bucket.ResetBucketInstance)
 
-	update := types.Update{Branch: "type-branch", RuntimeVersion: "1", UpdateId: "1700000000000"}
+	// A unique id per run, so a repeated run does not read this run's cache entry.
+	update := types.Update{Branch: "type-branch", RuntimeVersion: "1", UpdateId: strconv.FormatInt(time.Now().UnixNano(), 10)}
 	dir := filepath.Join(base, update.Branch, update.RuntimeVersion, update.UpdateId)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
