@@ -330,12 +330,31 @@ func GetUpdateBundlePathForRuntimeVersionAndUUID(branch string, runtimeVersion s
 	return matched, nil
 }
 
+// An update's type never changes once it is checked: CreateRollback writes the
+// rollback marker before .check. The TTL only reclaims cache storage.
+const updateTypeCacheTTLSeconds = 7 * 24 * 3600
+
 func GetUpdateType(update types.Update) types.UpdateType {
+	cache := cache2.GetCache()
+	cacheKey := fmt.Sprintf("updateType:%s:%s:%s:%s", version.Version, update.Branch, update.RuntimeVersion, update.UpdateId)
+	switch cache.Get(cacheKey) {
+	case "rollback":
+		return types.Rollback
+	case "normal":
+		return types.NormalUpdate
+	}
+	ttl := updateTypeCacheTTLSeconds
 	resolvedBucket := bucket.GetBucket()
-	file, _ := resolvedBucket.GetFile(update, "rollback")
+	file, err := resolvedBucket.GetFile(update, "rollback")
 	if file != nil {
 		file.Reader.Close()
+		_ = cache.Set(cacheKey, "rollback", &ttl)
 		return types.Rollback
+	}
+	// A rollback that is still being written has no marker yet, so only a
+	// checked update is known to be normal.
+	if err == nil && IsUpdateValid(update) {
+		_ = cache.Set(cacheKey, "normal", &ttl)
 	}
 	return types.NormalUpdate
 }
