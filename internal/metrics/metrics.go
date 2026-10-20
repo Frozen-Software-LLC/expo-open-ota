@@ -51,6 +51,7 @@ func InitMetrics() {
 	prometheus.MustRegister(updateDownloadsVec)
 	prometheus.MustRegister(updateErrorUsersVec)
 	prometheus.MustRegister(globalActiveUsersVec)
+	prometheus.MustRegister(httpRequestDuration, httpRequestsInFlight)
 }
 
 func CleanupMetrics() {
@@ -60,6 +61,8 @@ func CleanupMetrics() {
 	prometheus.Unregister(updateDownloadsVec)
 	prometheus.Unregister(updateErrorUsersVec)
 	prometheus.Unregister(globalActiveUsersVec)
+	prometheus.Unregister(httpRequestDuration)
+	prometheus.Unregister(httpRequestsInFlight)
 }
 
 func TrackUpdateErrorUsers(clientId, platform, runtime, branch, update string) {
