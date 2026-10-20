@@ -15,6 +15,7 @@ import (
 func TestLoggingMiddlewareRecordsHTTPMetrics(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	prometheus.DefaultRegisterer, prometheus.DefaultGatherer = reg, reg
+	metrics.ResetMetricsForTest()
 	metrics.InitMetrics()
 
 	r := mux.NewRouter()

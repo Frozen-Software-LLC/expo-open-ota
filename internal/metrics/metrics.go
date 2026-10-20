@@ -131,6 +131,7 @@ func PrometheusHandler() http.Handler {
 
 func ResetMetricsForTest() {
 	bundleResponses, bundleResponseBytes = newBundleMetrics()
+	httpRequestDuration, httpRequestsInFlight = newHTTPMetrics()
 	activeUsersVec = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "active_users_total",
