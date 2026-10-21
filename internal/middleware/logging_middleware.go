@@ -1,11 +1,14 @@
 package middleware
 
 import (
+	"expo-open-ota/internal/metrics"
 	"log"
 	"net/http"
 	"runtime/debug"
 	"strings"
 	"time"
+
+	"github.com/gorilla/mux"
 )
 
 func redactHeaders(headers http.Header) http.Header {
@@ -34,12 +37,14 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 
 		recorder := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
 
+		metrics.HTTPRequestStarted()
 		defer func() {
 			if err := recover(); err != nil {
 				log.Printf("Panic recovered during %s %s\nQuery: %s\nHeaders: %v\nError: %v\nStack Trace:\n%s",
 					r.Method, r.RequestURI, r.URL.RawQuery, safeHeaders, err, debug.Stack())
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				http.Error(recorder, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			}
+			metrics.TrackHTTPRequest(routeTemplate(r), r.Method, recorder.statusCode, time.Since(start))
 		}()
 
 		next.ServeHTTP(recorder, r)
@@ -49,6 +54,15 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		}
 		log.Printf("Completed %s %d in %v", r.RequestURI, recorder.statusCode, time.Since(start))
 	})
+}
+
+func routeTemplate(r *http.Request) string {
+	if route := mux.CurrentRoute(r); route != nil {
+		if tpl, err := route.GetPathTemplate(); err == nil {
+			return tpl
+		}
+	}
+	return "unmatched"
 }
 
 type statusRecorder struct {
