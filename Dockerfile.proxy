@@ -1,0 +1,4 @@
+# Forwards every request to PROXY_TARGET (e.g. https://other-ota.example.com).
+# On Railway: set Dockerfile Path to Dockerfile.proxy and add the PROXY_TARGET variable.
+FROM caddy:2-alpine
+CMD caddy reverse-proxy --from :${PORT:-8080} --to ${PROXY_TARGET} --change-host-header
