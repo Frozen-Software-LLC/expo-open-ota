@@ -35,6 +35,14 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - containerPort: 3000
+          # /hc returns 503 until the boot warm-up ends, for at most 3 minutes.
+          # The liveness probe starts only after this probe passes.
+          startupProbe:
+            httpGet:
+              path: /hc
+              port: 3000
+            periodSeconds: 10
+            failureThreshold: 20
           livenessProbe:
             httpGet:
               path: /hc
