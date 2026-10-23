@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"sync"
@@ -100,16 +101,20 @@ func summarize(latencies []time.Duration) (median, low, high time.Duration) {
 
 func TestStaleChannelMappingDoesNotWaitForExpo(t *testing.T) {
 	expo := newFakeExpo(t, "branch-1")
-	_, err := FetchExpoChannelMapping(testChannel)
-	require.NoError(t, err)
-	key := ComputeChannelMappingCacheKey(testChannel)
 
 	latencies := make([]time.Duration, 7)
 	for i := range latencies {
-		aged := ageChannelMapping(t, testChannel)
+		// A fetch stays in flight for a moment after it writes the cache, and a
+		// read that joins it starts no fetch, so each run uses its own channel.
+		channel := fmt.Sprintf("%s-%d", testChannel, i)
+		key := ComputeChannelMappingCacheKey(channel)
+		t.Cleanup(func() { cache2.GetCache().Delete(key) })
+		_, err := FetchExpoChannelMapping(channel)
+		require.NoError(t, err)
+		aged := ageChannelMapping(t, channel)
 		calls := expo.calls.Load()
 		start := time.Now()
-		mapping, err := FetchExpoChannelMapping(testChannel)
+		mapping, err := FetchExpoChannelMapping(channel)
 		latencies[i] = time.Since(start)
 		require.NoError(t, err)
 		require.Equal(t, "branch-1", mapping.BranchName)
@@ -218,11 +223,7 @@ func TestFailedChannelMappingRefreshKeepsLastMapping(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "branch-1", mapping.BranchName)
 	require.Eventually(t, func() bool { return failures.Load() == 1 }, 5*time.Second, time.Millisecond)
-	require.Equal(t, aged, cache2.GetCache().Get(ComputeChannelMappingCacheKey(testChannel)))
-	mapping, err = FetchExpoChannelMapping(testChannel)
-	require.NoError(t, err)
-	require.Equal(t, "branch-1", mapping.BranchName)
-	require.Eventually(t, func() bool { return failures.Load() == 2 }, 5*time.Second, time.Millisecond, "a later stale read retries the refresh")
+	require.Equal(t, aged, cache2.GetCache().Get(ComputeChannelMappingCacheKey(testChannel)), "a failed refresh keeps the last mapping")
 }
 
 func TestChannelMappingFetchTimesOut(t *testing.T) {

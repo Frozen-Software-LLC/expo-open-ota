@@ -2,6 +2,7 @@ package update
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -282,17 +283,17 @@ func fakeLatestUpdateScan(t *testing.T, head *atomic.Value) *atomic.Int32 {
 	return &scans
 }
 
-func latestUpdateId() string {
-	latest, err := GetLatestUpdateBundlePathForRuntimeVersion("stale-branch", "1", "ios")
+func latestUpdateId(branch string) string {
+	latest, err := GetLatestUpdateBundlePathForRuntimeVersion(branch, "1", "ios")
 	if err != nil || latest == nil {
 		return ""
 	}
 	return latest.UpdateId
 }
 
-func freshLatestUpdateKey(t *testing.T) string {
+func freshLatestUpdateKey(t *testing.T, branch string) string {
 	t.Helper()
-	cacheKey := ComputeLastUpdateCacheKey("stale-branch", "1", "ios")
+	cacheKey := ComputeLastUpdateCacheKey(branch, "1", "ios")
 	cache2.GetCache().Delete(cacheKey)
 	t.Cleanup(func() { cache2.GetCache().Delete(cacheKey) })
 	return cacheKey
@@ -304,18 +305,21 @@ func waitForCacheChange(t *testing.T, key, old string) {
 }
 
 func TestStaleLatestUpdateDoesNotWaitForScan(t *testing.T) {
-	cacheKey := freshLatestUpdateKey(t)
 	var head atomic.Value
 	head.Store("100")
 	scans := fakeLatestUpdateScan(t, &head)
-	require.Equal(t, "100", latestUpdateId())
 
 	latencies := make([]time.Duration, 7)
 	for i := range latencies {
+		// A refresh stays in flight for a moment after it writes the cache, and a
+		// read that joins it starts no scan, so each run uses its own key.
+		branch := fmt.Sprintf("stale-branch-%d", i)
+		cacheKey := freshLatestUpdateKey(t, branch)
+		require.Equal(t, "100", latestUpdateId(branch))
 		aged := ageLatestUpdate(t, cacheKey)
 		before := scans.Load()
 		start := time.Now()
-		id := latestUpdateId()
+		id := latestUpdateId(branch)
 		latencies[i] = time.Since(start)
 		require.Equal(t, "100", id)
 		waitForCacheChange(t, cacheKey, aged)
@@ -328,23 +332,23 @@ func TestStaleLatestUpdateDoesNotWaitForScan(t *testing.T) {
 }
 
 func TestStaleLatestUpdateRefreshIsVisibleLater(t *testing.T) {
-	cacheKey := freshLatestUpdateKey(t)
+	cacheKey := freshLatestUpdateKey(t, "stale-branch")
 	var head atomic.Value
 	head.Store("100")
 	fakeLatestUpdateScan(t, &head)
-	require.Equal(t, "100", latestUpdateId())
+	require.Equal(t, "100", latestUpdateId("stale-branch"))
 
 	head.Store("200")
 	aged := ageLatestUpdate(t, cacheKey)
-	require.NotEmpty(t, latestUpdateId())
+	require.NotEmpty(t, latestUpdateId("stale-branch"))
 	waitForCacheChange(t, cacheKey, aged)
-	require.Equal(t, "200", latestUpdateId())
+	require.Equal(t, "200", latestUpdateId("stale-branch"))
 }
 
 // A publish during a background refresh wins: the next read scans again, and
 // the refresh that started before the publish never caches its older result.
 func TestPublishDuringStaleRefreshWins(t *testing.T) {
-	cacheKey := freshLatestUpdateKey(t)
+	cacheKey := freshLatestUpdateKey(t, "stale-branch")
 	var head atomic.Value
 	head.Store("100")
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -358,21 +362,21 @@ func TestPublishDuringStaleRefreshWins(t *testing.T) {
 		return &types.Update{Branch: branch, RuntimeVersion: runtimeVersion, UpdateId: updateId}, nil
 	}
 	t.Cleanup(func() { scanLatestUpdateFunc = scanLatestUpdate })
-	require.Equal(t, "100", latestUpdateId())
+	require.Equal(t, "100", latestUpdateId("stale-branch"))
 
 	ageLatestUpdate(t, cacheKey)
 	staleRead := make(chan string, 1)
-	go func() { staleRead <- latestUpdateId() }()
+	go func() { staleRead <- latestUpdateId("stale-branch") }()
 	<-entered
 	head.Store("200")
 	// What MarkUpdateAsChecked does after it writes .check.
 	invalidateLatestUpdate(cacheKey)
-	require.Equal(t, "200", latestUpdateId(), "the read after a publish scans again")
+	require.Equal(t, "200", latestUpdateId("stale-branch"), "the read after a publish scans again")
 
 	close(release)
 	require.Equal(t, "100", <-staleRead)
 	for deadline := time.Now().Add(100 * time.Millisecond); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		require.Equal(t, "200", latestUpdateId(), "the refresh that started before the publish cached its result")
+		require.Equal(t, "200", latestUpdateId("stale-branch"), "the refresh that started before the publish cached its result")
 	}
 	require.Equal(t, int32(3), scans.Load())
 }
