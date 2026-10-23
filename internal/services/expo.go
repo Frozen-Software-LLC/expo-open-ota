@@ -13,7 +13,11 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 type ExpoUserAccount struct {
@@ -309,8 +313,34 @@ func FetchSelfExpoUsername() string {
 }
 
 func ComputeChannelMappingCacheKey(channelName string) string {
-	return fmt.Sprintf("channelMapping:%s:%s", version.Version, channelName)
+	return fmt.Sprintf("channelMapping-v2:%s:%s", version.Version, channelName)
 }
+
+// cachedChannelMapping is the cache entry for one channel. A nil Mapping
+// records that Expo had no mapping for the channel.
+type cachedChannelMapping struct {
+	Mapping   *ExpoChannelMapping `json:"mapping"`
+	FetchedAt time.Time           `json:"fetchedAt"`
+}
+
+const (
+	channelMappingFreshFor = time.Minute
+	// A failed refresh keeps the last mapping in use, at most this long.
+	channelMappingMaxAge = time.Hour
+	// A channel created a moment ago must not get the expired-preview rollback
+	// for long, so "no mapping" is never served older than this.
+	noChannelMappingMaxAge = 10 * time.Second
+)
+
+var (
+	channelMappingTimeout = 5 * time.Second
+	channelMappingFlight  singleflight.Group
+	// Incremented by every remap. ponytail: process-local, so with a shared
+	// cache a fetch on another replica can still re-cache the old mapping.
+	channelMappingGeneration atomic.Uint64
+	// Held for writing by a remap, for reading by a fetch's check and cache write.
+	channelMappingCacheMu sync.RWMutex
+)
 
 func FetchExpoChannelMapping(channelName string) (*ExpoChannelMapping, error) {
 	start := time.Now()
@@ -319,17 +349,64 @@ func FetchExpoChannelMapping(channelName string) (*ExpoChannelMapping, error) {
 		log.Printf("[TRACE] FetchExpoChannelMapping - END duration=%v", time.Since(start))
 	}()
 
-	cache := cache2.GetCache()
 	cacheKey := ComputeChannelMappingCacheKey(channelName)
-	if cachedValue := cache.Get(cacheKey); cachedValue != "" {
-		var mapping ExpoChannelMapping
-		if err := json.Unmarshal([]byte(cachedValue), &mapping); err != nil {
+	if cachedValue := cache2.GetCache().Get(cacheKey); cachedValue != "" {
+		var cached cachedChannelMapping
+		if err := json.Unmarshal([]byte(cachedValue), &cached); err != nil {
 			log.Printf("[ChannelMapping] cache unmarshal error for key=%s: %v", cacheKey, err)
-		} else {
-			return &mapping, nil
+		} else if cached.Mapping != nil {
+			if time.Since(cached.FetchedAt) >= channelMappingFreshFor {
+				// Answer from the cache now; the fetch refreshes it in the background.
+				fetchChannelMapping(channelName)
+			}
+			return cached.Mapping, nil
+		} else if time.Since(cached.FetchedAt) < noChannelMappingMaxAge {
+			return nil, nil
 		}
 	}
+	result := <-fetchChannelMapping(channelName)
+	if result.Err != nil {
+		return nil, result.Err
+	}
+	return result.Val.(*ExpoChannelMapping), nil
+}
 
+// fetchChannelMapping asks Expo once per channel, however many callers wait,
+// and caches the answer unless a remap happened since the fetch started.
+func fetchChannelMapping(channelName string) <-chan singleflight.Result {
+	cacheKey := ComputeChannelMappingCacheKey(channelName)
+	generation := channelMappingGeneration.Load()
+	return channelMappingFlight.DoChan(fmt.Sprintf("%s:%d", cacheKey, generation), func() (interface{}, error) {
+		mapping, err := queryExpoChannelMapping(channelName)
+		if err != nil {
+			log.Printf("[ChannelMapping] fetch failed for channel=%s: %v", channelName, err)
+			return nil, err
+		}
+		maxAge := channelMappingMaxAge
+		if mapping == nil {
+			maxAge = noChannelMappingMaxAge
+		}
+		ttl := int(maxAge / time.Second)
+		cacheValue, _ := json.Marshal(cachedChannelMapping{Mapping: mapping, FetchedAt: time.Now()})
+		channelMappingCacheMu.RLock()
+		defer channelMappingCacheMu.RUnlock()
+		if channelMappingGeneration.Load() == generation {
+			_ = cache2.GetCache().Set(cacheKey, string(cacheValue), &ttl)
+		}
+		return mapping, nil
+	})
+}
+
+// InvalidateChannelMapping drops the cached mapping after a remap, and stops
+// any fetch that started before it from caching the old mapping.
+func InvalidateChannelMapping(channelName string) {
+	channelMappingCacheMu.Lock()
+	defer channelMappingCacheMu.Unlock()
+	channelMappingGeneration.Add(1)
+	cache2.GetCache().Delete(ComputeChannelMappingCacheKey(channelName))
+}
+
+func queryExpoChannelMapping(channelName string) (*ExpoChannelMapping, error) {
 	query := `
 		query FetchAppChannel($appId: String!, $channelName: String!) {
 			app {
@@ -377,7 +454,8 @@ func FetchExpoChannelMapping(channelName string) (*ExpoChannelMapping, error) {
 	if config.IsTestMode() {
 		headers["operationName"] = "FetchExpoChannelMapping"
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), channelMappingTimeout)
+	defer cancel()
 
 	log.Printf("[TRACE] FetchExpoChannelMapping - Calling makeGraphQLRequest at %s", time.Now().Format(time.RFC3339Nano))
 	gqlStart := time.Now()
@@ -424,15 +502,10 @@ func FetchExpoChannelMapping(channelName string) (*ExpoChannelMapping, error) {
 	}
 
 	log.Printf("[TRACE] FetchExpoChannelMapping - Found branch mapping: branch=%s", branchName)
-	result := &ExpoChannelMapping{
+	return &ExpoChannelMapping{
 		Id:         resp.Data.App.ById.UpdateChannelByName.ID,
 		BranchName: branchName,
-	}
-	if cacheValue, err := json.Marshal(result); err == nil {
-		ttl := 60
-		_ = cache.Set(cacheKey, string(cacheValue), &ttl)
-	}
-	return result, nil
+	}, nil
 }
 
 func FetchExpoBranchesMapping() ([]ExpoBranchMapping, error) {

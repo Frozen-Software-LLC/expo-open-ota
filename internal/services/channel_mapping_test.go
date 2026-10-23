@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"net/http"
 	"sort"
 	"sync"
@@ -55,23 +56,35 @@ func newFakeExpo(t *testing.T, branch string) *fakeExpo {
 			}}},
 		})
 	})
-	cache2.GetCache().Delete(ComputeChannelMappingCacheKey(testChannel))
-	t.Cleanup(func() { cache2.GetCache().Delete(ComputeChannelMappingCacheKey(testChannel)) })
+	// Also keeps a fetch left over from an earlier test from answering this one.
+	InvalidateChannelMapping(testChannel)
+	t.Cleanup(func() { InvalidateChannelMapping(testChannel) })
 	return expo
 }
 
 // ageChannelMapping makes the cached mapping look older than the freshness
-// window and returns the value it left in the cache. A 60 s TTL entry that
-// old has expired.
+// window and returns the value it left in the cache.
 func ageChannelMapping(t *testing.T, channel string) string {
 	t.Helper()
-	cache2.GetCache().Delete(ComputeChannelMappingCacheKey(channel))
-	return ""
+	return backdateChannelMapping(t, channel, channelMappingFreshFor)
+}
+
+func backdateChannelMapping(t *testing.T, channel string, age time.Duration) string {
+	t.Helper()
+	key := ComputeChannelMappingCacheKey(channel)
+	var entry cachedChannelMapping
+	require.NoError(t, json.Unmarshal([]byte(cache2.GetCache().Get(key)), &entry))
+	entry.FetchedAt = time.Now().Add(-age)
+	value, err := json.Marshal(entry)
+	require.NoError(t, err)
+	ttl := 60
+	require.NoError(t, cache2.GetCache().Set(key, string(value), &ttl))
+	return string(value)
 }
 
 // remapChannel does to the cache what the dashboard remap handler does.
 func remapChannel(channel string) {
-	cache2.GetCache().Delete(ComputeChannelMappingCacheKey(channel))
+	InvalidateChannelMapping(channel)
 }
 
 func waitForCacheChange(t *testing.T, key, old string) {
@@ -169,4 +182,59 @@ func TestRemapDuringChannelMappingRefresh(t *testing.T) {
 		mapping, err := FetchExpoChannelMapping(testChannel)
 		return err != nil || mapping.BranchName != "branch-2"
 	}, 3*fakeExpoDelay, 5*time.Millisecond, "the pre-remap refresh wrote the old mapping")
+}
+
+func TestNoChannelMappingIsNeverServedStale(t *testing.T) {
+	expo := newFakeExpo(t, "deleted")
+	for i := 0; i < 2; i++ {
+		mapping, err := FetchExpoChannelMapping(testChannel)
+		require.NoError(t, err)
+		require.Nil(t, mapping)
+	}
+	require.Equal(t, int32(1), expo.calls.Load(), "a fresh no-mapping answer is cached")
+
+	expo.branch.Store("branch-1")
+	backdateChannelMapping(t, testChannel, noChannelMappingMaxAge)
+	start := time.Now()
+	mapping, err := FetchExpoChannelMapping(testChannel)
+	require.NoError(t, err)
+	require.Equal(t, "branch-1", mapping.BranchName)
+	require.GreaterOrEqual(t, time.Since(start), fakeExpoDelay, "an old no-mapping answer waits for Expo")
+}
+
+func TestFailedChannelMappingRefreshKeepsLastMapping(t *testing.T) {
+	newFakeExpo(t, "branch-1")
+	_, err := FetchExpoChannelMapping(testChannel)
+	require.NoError(t, err)
+	var failures atomic.Int32
+	httpmock.RegisterResponder(http.MethodPost, "https://api.expo.dev/graphql", func(*http.Request) (*http.Response, error) {
+		failures.Add(1)
+		return httpmock.NewStringResponse(http.StatusBadGateway, "down"), nil
+	})
+	aged := ageChannelMapping(t, testChannel)
+
+	mapping, err := FetchExpoChannelMapping(testChannel)
+	require.NoError(t, err)
+	require.Equal(t, "branch-1", mapping.BranchName)
+	require.Eventually(t, func() bool { return failures.Load() == 1 }, 5*time.Second, time.Millisecond)
+	require.Equal(t, aged, cache2.GetCache().Get(ComputeChannelMappingCacheKey(testChannel)))
+	mapping, err = FetchExpoChannelMapping(testChannel)
+	require.NoError(t, err)
+	require.Equal(t, "branch-1", mapping.BranchName)
+	require.Eventually(t, func() bool { return failures.Load() == 2 }, 5*time.Second, time.Millisecond, "a later stale read retries the refresh")
+}
+
+func TestChannelMappingFetchTimesOut(t *testing.T) {
+	newFakeExpo(t, "branch-1")
+	channelMappingTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { channelMappingTimeout = 5 * time.Second })
+	httpmock.RegisterResponder(http.MethodPost, "https://api.expo.dev/graphql", func(req *http.Request) (*http.Response, error) {
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})
+
+	start := time.Now()
+	_, err := FetchExpoChannelMapping(testChannel)
+	require.Error(t, err)
+	require.Less(t, time.Since(start), time.Second)
 }

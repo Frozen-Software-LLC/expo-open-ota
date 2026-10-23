@@ -473,16 +473,15 @@ func UpdateChannelBranchMappingHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("Error updating channel branch mapping"))
 		return
 	}
-	w.WriteHeader(http.StatusOK)
-	marshaledResponse, _ := json.Marshal("ok")
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(marshaledResponse)
-
 	branchesCacheKey := dashboard.ComputeGetBranchesCacheKey()
 	channelsCacheKey := dashboard.ComputeGetChannelsCacheKey()
 	cache := cache2.GetCache()
 	cache.Delete(branchesCacheKey)
 	cache.Delete(channelsCacheKey)
-	channelMappingCacheKey := services.ComputeChannelMappingCacheKey(releaseChannel)
-	cache.Delete(channelMappingCacheKey)
+	services.InvalidateChannelMapping(releaseChannel)
+
+	w.WriteHeader(http.StatusOK)
+	marshaledResponse, _ := json.Marshal("ok")
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(marshaledResponse)
 }
