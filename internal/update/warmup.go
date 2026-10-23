@@ -4,6 +4,7 @@ import (
 	"expo-open-ota/internal/bucket"
 	"expo-open-ota/internal/services"
 	"log"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -57,8 +58,10 @@ func activeManifestKeys() map[manifestKey]struct{} {
 		log.Printf("[BootWarmUp] error fetching channel mappings: %v", err)
 		return nil
 	}
+	// Several channels can serve one branch.
+	slices.Sort(branches)
 	keys := map[manifestKey]struct{}{}
-	for _, branch := range branches {
+	for _, branch := range slices.Compact(branches) {
 		runtimeVersions, err := newestRuntimeVersions(branch)
 		if err != nil {
 			log.Printf("[BootWarmUp] error listing runtime versions for branch=%s: %v", branch, err)
