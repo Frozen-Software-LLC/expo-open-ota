@@ -1,6 +1,7 @@
 package update
 
 import (
+	"expo-open-ota/internal/types"
 	"log"
 	"sync"
 )
@@ -31,6 +32,10 @@ func PreWarmManifestCache(branch, runtimeVersion, platform string) {
 		return
 	}
 	if latestUpdate == nil {
+		return
+	}
+	// /manifest reads the update type first, and a rollback needs no manifest.
+	if GetUpdateType(*latestUpdate) == types.Rollback {
 		return
 	}
 

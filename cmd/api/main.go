@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 )
 
 import (
@@ -29,7 +30,7 @@ func main() {
 		return
 	}
 	migration.RunMigrationsWithLock()
-	router := infrastructure.NewRouter()
+	router := infrastructure.HoldHealthCheck(update.StartBootWarmUp(20*time.Second), infrastructure.NewRouter())
 	log.Println("Server is running on port " + config.GetPort())
 	corsOptions := handlers.CORS(
 		handlers.AllowedHeaders([]string{"Authorization", "Content-Type"}),

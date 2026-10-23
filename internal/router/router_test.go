@@ -3,6 +3,7 @@ package infrastructure
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"expo-open-ota/internal/bucket"
 	cache2 "expo-open-ota/internal/cache"
 	"expo-open-ota/internal/types"
+	"expo-open-ota/internal/update"
 
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/require"
@@ -87,7 +89,7 @@ func startFreshProcess(t *testing.T) *countingBucket {
 // which is when Render starts sending it traffic.
 func bootServer(t *testing.T) http.Handler {
 	t.Helper()
-	server := NewRouter()
+	server := HoldHealthCheck(update.StartBootWarmUp(5*time.Second), NewRouter())
 	require.Eventually(t, func() bool { return get(server, "/hc").Code == http.StatusOK }, 5*time.Second, time.Millisecond)
 	return server
 }
@@ -120,4 +122,54 @@ func TestFirstManifestAfterBootReadsNoStorage(t *testing.T) {
 	require.Equal(t, http.StatusOK, res.Code, res.Body.String())
 	require.Contains(t, res.Body.String(), `"launchAsset"`)
 	require.Zero(t, manifestReads, "the first manifest after boot must come from warm caches")
+}
+
+// holdExpo makes Expo calls fail, but only once release is called or the test ends.
+func holdExpo(t *testing.T) (release func()) {
+	entered, held := make(chan struct{}), make(chan struct{})
+	var enter, unhold sync.Once
+	httpmock.RegisterResponder(http.MethodPost, "https://api.expo.dev/graphql", func(*http.Request) (*http.Response, error) {
+		enter.Do(func() { close(entered) })
+		<-held
+		return httpmock.NewStringResponse(http.StatusBadGateway, "expo is down"), nil
+	})
+	release = func() { unhold.Do(func() { close(held) }) }
+	// The warm-up must reach Expo before httpmock is deactivated.
+	t.Cleanup(func() { <-entered; release() })
+	return release
+}
+
+func TestHealthCheckWaitsForBootWarmUp(t *testing.T) {
+	startFreshProcess(t)
+	release := holdExpo(t)
+	server := HoldHealthCheck(update.StartBootWarmUp(time.Minute), NewRouter())
+
+	require.Equal(t, http.StatusServiceUnavailable, get(server, "/hc").Code)
+	require.Equal(t, http.StatusBadRequest, get(server, "/manifest").Code, "other routes answer during the warm-up")
+	release()
+	require.Eventually(t, func() bool { return get(server, "/hc").Code == http.StatusOK }, 5*time.Second, time.Millisecond,
+		"a failed warm-up ends the wait")
+}
+
+func TestHealthCheckPassesAfterDeadlineWhenWarmUpHangs(t *testing.T) {
+	startFreshProcess(t)
+	holdExpo(t)
+	server := HoldHealthCheck(update.StartBootWarmUp(100*time.Millisecond), NewRouter())
+
+	require.Equal(t, http.StatusServiceUnavailable, get(server, "/hc").Code)
+	require.Eventually(t, func() bool { return get(server, "/hc").Code == http.StatusOK }, 2*time.Second, time.Millisecond)
+}
+
+type panickingBucket struct{ bucket.Bucket }
+
+func (panickingBucket) GetRuntimeVersions(string) ([]bucket.RuntimeVersionWithStats, error) {
+	panic("storage exploded")
+}
+
+func TestHealthCheckPassesWhenWarmUpPanics(t *testing.T) {
+	startFreshProcess(t)
+	bucket.SetBucketInstance(panickingBucket{})
+	server := HoldHealthCheck(update.StartBootWarmUp(time.Minute), NewRouter())
+
+	require.Eventually(t, func() bool { return get(server, "/hc").Code == http.StatusOK }, 5*time.Second, time.Millisecond)
 }
