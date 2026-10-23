@@ -19,9 +19,10 @@ const patchLookupMaxBytes = 4 << 20
 
 // Keep these small lookups in-process: cache hits add neither bucket nor
 // Redis reads. An entry (including confirmed absence) older than 60 seconds is
-// still answered, while one background read per key replaces it. A failing read
-// keeps it for at most 30 minutes. The LRU and byte budget bound memory even
-// with many distinct client base IDs.
+// still answered, while one background read per key replaces it. A failed read
+// keeps it and waits another 60 seconds before the next read, for at most 30
+// minutes. The LRU and byte budget bound memory even with many distinct client
+// base IDs.
 var bundlePatchObjects = newPatchObjectCache(time.Now)
 
 type patchObjectEntry struct {
@@ -29,6 +30,8 @@ type patchObjectEntry struct {
 	data    []byte
 	missing bool
 	fetched time.Time
+	// Next background read; later than fetched after a failed read.
+	refreshAt time.Time
 }
 type patchObjectCache struct {
 	mu      sync.Mutex
@@ -88,15 +91,23 @@ func (c *patchObjectCache) get(key string, load func() ([]byte, error)) ([]byte,
 	return resolve(value.(patchObjectEntry))
 }
 func (c *patchObjectCache) fresh(e patchObjectEntry) bool {
-	return c.now().Before(e.fetched.Add(patchLookupTTL))
+	return c.now().Before(e.refreshAt)
 }
 func (c *patchObjectCache) load(key string, load func() ([]byte, error)) (patchObjectEntry, error) {
 	data, err := load()
 	// Never turn timeouts, permission errors or failed reads into cached misses.
 	if err != nil && !errors.Is(err, http.ErrMissingFile) {
+		c.mu.Lock()
+		if e, ok := c.entries[key]; ok {
+			entry := e.Value.(patchObjectEntry)
+			entry.refreshAt = c.now().Add(patchLookupTTL)
+			e.Value = entry
+		}
+		c.mu.Unlock()
 		return patchObjectEntry{}, err
 	}
-	entry := patchObjectEntry{key: key, data: data, missing: errors.Is(err, http.ErrMissingFile), fetched: c.now()}
+	now := c.now()
+	entry := patchObjectEntry{key: key, data: data, missing: errors.Is(err, http.ErrMissingFile), fetched: now, refreshAt: now.Add(patchLookupTTL)}
 	if len(data) <= patchLookupMaxBytes {
 		c.mu.Lock()
 		if old, ok := c.entries[key]; ok {

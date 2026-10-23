@@ -1,6 +1,7 @@
 package assets
 
 import (
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ type heldBucket struct {
 	reads   atomic.Int32
 	held    atomic.Bool
 	removed atomic.Bool
+	failing atomic.Bool
 	release chan struct{}
 }
 
@@ -27,6 +29,9 @@ func (b *heldBucket) GetFile(update types.Update, assetPath string) (*types.Buck
 	b.reads.Add(1)
 	if b.held.Load() {
 		<-b.release
+	}
+	if b.failing.Load() {
+		return nil, errors.New("storage is down")
 	}
 	if b.removed.Load() {
 		return nil, nil
@@ -55,9 +60,9 @@ var pinnedRequest = AssetsRequest{Branch: "branch-1", RuntimeVersion: "1", Platf
 
 func TestStalePinnedUpdateIsAnsweredWithoutWaitingForStorage(t *testing.T) {
 	storage := useHeldBucket(t)
+	makeChecksStale(t)
 	_, err := ResolveUpdate(pinnedRequest)
 	require.NoError(t, err)
-	makeChecksStale(t)
 	storage.held.Store(true)
 	defer func() {
 		close(storage.release)
@@ -80,15 +85,38 @@ func TestStalePinnedUpdateIsAnsweredWithoutWaitingForStorage(t *testing.T) {
 
 func TestRemovedPinnedUpdateStopsBeingServedAfterBackgroundCheck(t *testing.T) {
 	storage := useHeldBucket(t)
+	makeChecksStale(t)
 	_, err := ResolveUpdate(pinnedRequest)
 	require.NoError(t, err)
-	makeChecksStale(t)
 	storage.removed.Store(true)
 
 	require.Eventually(t, func() bool {
 		_, err := ResolveUpdate(pinnedRequest)
 		return err != nil
 	}, 5*time.Second, time.Millisecond)
+}
+
+func TestFailedPinnedUpdateCheckKeepsAnswerAndWaitsBeforeNextRead(t *testing.T) {
+	storage := useHeldBucket(t)
+	makeChecksStale(t)
+	_, err := ResolveUpdate(pinnedRequest)
+	require.NoError(t, err)
+	pinnedUpdateFreshFor = time.Hour
+	storage.failing.Store(true)
+	readsBefore := storage.reads.Load()
+
+	_, err = ResolveUpdate(pinnedRequest)
+	require.NoError(t, err)
+	// Joining the flight waits for the background check to end.
+	_, _, _ = pinnedUpdateChecks.Do(pinnedUpdateKey(pinnedRequest), func() (interface{}, error) { return nil, nil })
+	readsAfterCheck := storage.reads.Load()
+	require.Greater(t, readsAfterCheck, readsBefore, "the stale answer started a check")
+	for i := 0; i < 10; i++ {
+		_, err = ResolveUpdate(pinnedRequest)
+		require.NoError(t, err, "a failed read keeps the last answer")
+	}
+	_, _, _ = pinnedUpdateChecks.Do(pinnedUpdateKey(pinnedRequest), func() (interface{}, error) { return nil, nil })
+	require.Equal(t, readsAfterCheck, storage.reads.Load(), "a failed check waits before the next read")
 }
 
 func TestPinnedUpdateOfOtherPlatformIsRejected(t *testing.T) {

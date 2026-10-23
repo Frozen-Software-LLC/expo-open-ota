@@ -102,18 +102,26 @@ are different baselines; a patch is never assumed valid for an unknown base.
 
 New manifests pin each asset URL to its storage update ID. This avoids a newer
 promotion changing the full-bundle fallback while the earlier update downloads.
-Legacy unpinned URLs retain their old behavior. Validation is cached for 60 seconds
-to avoid repeated object-storage reads for every asset. Manifest/asset cache keys
-are versioned so old cached unpinned URLs are not reused after deployment.
+Legacy unpinned URLs retain their old behavior. Validation is cached to avoid
+repeated object-storage reads for every asset. A result older than 60 seconds is
+still answered while one background check per key reads storage again, so a
+removed update can be served until that check ends. A failed read keeps the last
+result and waits another 60 seconds before the next check, for at most 30
+minutes. Manifest/asset cache keys are versioned so old cached unpinned URLs are
+not reused after deployment.
 
-Patch negotiation caches stored update metadata and patch-record bytes, including
-confirmed missing objects, for 60 seconds per API process. Concurrent requests
-for the same key share a single lookup. The cache is bounded to 1,024 entries
-and 4 MiB of payload, uses no Redis requests, and never caches storage/read
-errors. Identity validation still runs for every request; patch bodies are not
-cached here. A patch published after a cached miss can take up to 60 seconds
-to become eligible (the full-bundle path remains available). Cache keys include
-branch, runtime, storage update ID and object path.
+Patch negotiation caches stored update metadata and patch-record bytes,
+including confirmed missing objects, per API process. An entry older than 60
+seconds is still answered while one background read per key replaces it. A
+failed read keeps the entry and waits another 60 seconds before the next read,
+for at most 30 minutes. Concurrent requests for the same key share a single
+lookup. The cache is bounded to 1,024 entries and 4 MiB of payload, uses no
+Redis requests, and never caches storage/read errors. Identity validation still
+runs for every request; patch bodies are not cached here. A patch published
+after a cached miss becomes eligible after the first request that arrives 60
+seconds or more after the miss was cached, once its background read ends (the
+full-bundle path remains available). Cache keys include branch, runtime, storage
+update ID and object path.
 
 Measured cache, native delivery and cost checks show zero bucket reads for warm
 patch redirects. Remaining findings include duplicate metadata reads during

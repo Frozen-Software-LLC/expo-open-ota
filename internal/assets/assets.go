@@ -1,6 +1,7 @@
 package assets
 
 import (
+	"encoding/json"
 	"expo-open-ota/internal/bucket"
 	"expo-open-ota/internal/cache"
 	"expo-open-ota/internal/cdn"
@@ -10,7 +11,6 @@ import (
 	"log"
 	"mime"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -50,17 +50,17 @@ func ResolveUpdate(req AssetsRequest) (*types.Update, error) {
 	// A manifest may reference many assets. Avoid re-reading validation objects
 	// from storage for every file while keeping removal checks short-lived.
 	key := pinnedUpdateKey(req)
-	if checkedAt, err := strconv.ParseInt(cache.GetCache().Get(key), 10, 64); err == nil {
-		if time.Since(time.Unix(checkedAt, 0)) >= pinnedUpdateFreshFor {
+	if checked, ok := readPinnedUpdateCheck(key); ok {
+		if !time.Now().Before(checked.RefreshAt) {
 			// Answer now; one background check per key re-reads storage.
 			pinnedUpdateChecks.DoChan(key, func() (interface{}, error) {
-				return nil, checkPinnedUpdate(key, *target, req.Platform)
+				return nil, checkPinnedUpdate(key, *target, req.Platform, checked.ExpiresAt)
 			})
 		}
 		return target, nil
 	}
 	_, err, _ = pinnedUpdateChecks.Do(key, func() (interface{}, error) {
-		return nil, checkPinnedUpdate(key, *target, req.Platform)
+		return nil, checkPinnedUpdate(key, *target, req.Platform, time.Time{})
 	})
 	if err != nil {
 		return nil, err
@@ -70,18 +70,50 @@ func ResolveUpdate(req AssetsRequest) (*types.Update, error) {
 
 // A checked update older than this is still answered, while one background
 // check replaces it. A removed update is answered until that check ends.
+// A failed check keeps the answer and waits this long again, until ExpiresAt.
 var pinnedUpdateFreshFor = time.Minute
 
+const pinnedUpdateMaxAge = 30 * time.Minute
+
 var pinnedUpdateChecks singleflight.Group
+
+type pinnedUpdateCheck struct {
+	RefreshAt time.Time `json:"refreshAt"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
 
 func pinnedUpdateKey(req AssetsRequest) string {
 	return fmt.Sprintf("pinnedAssetUpdate:v2:%s:%s:%s:%s", req.Branch, req.RuntimeVersion, req.Platform, req.UpdateID)
 }
 
-func checkPinnedUpdate(key string, target types.Update, platform string) error {
+func readPinnedUpdateCheck(key string) (pinnedUpdateCheck, bool) {
+	var checked pinnedUpdateCheck
+	value := cache.GetCache().Get(key)
+	if value == "" || json.Unmarshal([]byte(value), &checked) != nil || !time.Now().Before(checked.ExpiresAt) {
+		return pinnedUpdateCheck{}, false
+	}
+	return checked, true
+}
+
+func storePinnedUpdateCheck(key string, checked pinnedUpdateCheck) {
+	value, err := json.Marshal(checked)
+	ttl := int(time.Until(checked.ExpiresAt).Seconds())
+	if err != nil || ttl <= 0 {
+		return
+	}
+	_ = cache.GetCache().Set(key, string(value), &ttl)
+}
+
+// expiresAt is zero when nothing is cached for key.
+func checkPinnedUpdate(key string, target types.Update, platform string, expiresAt time.Time) error {
+	retryLater := func() {
+		if !expiresAt.IsZero() {
+			storePinnedUpdateCheck(key, pinnedUpdateCheck{RefreshAt: time.Now().Add(pinnedUpdateFreshFor), ExpiresAt: expiresAt})
+		}
+	}
 	checked, err := update.HasUpdateBeenChecked(target)
 	if err != nil {
-		// A failed read keeps the last answer, for at most the key's TTL.
+		retryLater()
 		return fmt.Errorf("invalid target update")
 	}
 	if !checked || update.GetUpdateType(target) != types.NormalUpdate {
@@ -90,14 +122,15 @@ func checkPinnedUpdate(key string, target types.Update, platform string) error {
 	}
 	metadata, err := update.RetrieveUpdateStoredMetadata(target)
 	if err != nil {
+		retryLater()
 		return fmt.Errorf("target platform mismatch")
 	}
 	if metadata == nil || metadata.Platform != platform {
 		cache.GetCache().Delete(key)
 		return fmt.Errorf("target platform mismatch")
 	}
-	ttl := 1800
-	_ = cache.GetCache().Set(key, strconv.FormatInt(time.Now().Unix(), 10), &ttl)
+	now := time.Now()
+	storePinnedUpdateCheck(key, pinnedUpdateCheck{RefreshAt: now.Add(pinnedUpdateFreshFor), ExpiresAt: now.Add(pinnedUpdateMaxAge)})
 	return nil
 }
 

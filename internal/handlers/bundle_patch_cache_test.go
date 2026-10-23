@@ -118,9 +118,22 @@ func TestPatchObjectCacheKeepsLastAnswerWhenStorageFails(t *testing.T) {
 	data, err = c.get("error", load)
 	require.NoError(t, err)
 	require.Equal(t, "record", string(data), "a failed refresh keeps the last answer")
+	afterFailure := reads.Load()
+	for i := 0; i < 10; i++ {
+		_, _ = c.get("error", load)
+	}
+	// Joining the flight waits for a background read that the loop started.
+	_, _, _ = c.flights.Do("error", func() (any, error) { return nil, nil })
+	require.Equal(t, afterFailure, reads.Load(), "a failed refresh waits before the next read")
+	clock.advance(patchLookupTTL)
+	_, _ = c.get("error", load)
+	require.Eventually(t, func() bool { return reads.Load() == afterFailure+1 }, 5*time.Second, time.Millisecond)
 
 	clock.advance(patchLookupMaxAge)
-	_, err = c.get("error", load)
+	require.Eventually(t, func() bool {
+		_, err = c.get("error", load)
+		return err != nil
+	}, 5*time.Second, time.Millisecond)
 	require.ErrorIs(t, err, failure, "the last answer is kept for at most patchLookupMaxAge")
 }
 
