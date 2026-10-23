@@ -44,17 +44,22 @@ func (b *countingBucket) GetFile(update types.Update, assetPath string) (*types.
 	return b.Bucket.GetFile(update, assetPath)
 }
 
+type fakeProcess struct {
+	storage   *countingBucket
+	expoCalls atomic.Int32
+}
+
 // startFreshProcess gives the test what a restarted server has: empty caches,
-// the fixture bucket behind a read counter, and an Expo app whose only
-// channel, staging, maps to branch-1.
-func startFreshProcess(t *testing.T) *countingBucket {
+// the fixture bucket behind a read counter, and an Expo app whose channel
+// staging maps to branch-1, next to a channel with an unreadable mapping.
+func startFreshProcess(t *testing.T) *fakeProcess {
 	t.Setenv("STORAGE_MODE", "local")
 	t.Setenv("LOCAL_BUCKET_BASE_PATH", testUpdatesPath)
 	t.Setenv("BASE_URL", "http://localhost:3000")
 	t.Setenv("EXPO_APP_ID", "app-id")
 	t.Setenv("EXPO_ACCESS_TOKEN", "token")
-	storage := &countingBucket{Bucket: &bucket.LocalBucket{BasePath: testUpdatesPath}}
-	bucket.SetBucketInstance(storage)
+	process := &fakeProcess{storage: &countingBucket{Bucket: &bucket.LocalBucket{BasePath: testUpdatesPath}}}
+	bucket.SetBucketInstance(process.storage)
 	t.Cleanup(bucket.ResetBucketInstance)
 	require.NoError(t, cache2.GetCache().Clear())
 	t.Cleanup(func() { _ = cache2.GetCache().Clear() })
@@ -62,27 +67,25 @@ func startFreshProcess(t *testing.T) *countingBucket {
 	httpmock.Activate()
 	t.Cleanup(httpmock.DeactivateAndReset)
 	httpmock.RegisterResponder(http.MethodPost, "https://api.expo.dev/graphql", func(req *http.Request) (*http.Response, error) {
-		switch req.Header.Get("operationName") {
-		case "FetchExpoChannels":
-			return httpmock.NewJsonResponse(http.StatusOK, map[string]any{
-				"data": map[string]any{"app": map[string]any{"byId": map[string]any{
-					"updateChannels": []map[string]any{{"id": "staging-id", "name": "staging"}},
-				}}},
-			})
-		case "FetchExpoChannelMapping":
-			return httpmock.NewJsonResponse(http.StatusOK, map[string]any{
-				"data": map[string]any{"app": map[string]any{"byId": map[string]any{
-					"updateBranches": []map[string]any{{"id": "branch-1-id", "name": "branch-1"}},
-					"updateChannelByName": map[string]any{
+		process.expoCalls.Add(1)
+		if req.Header.Get("operationName") != "FetchExpoBranches" {
+			return httpmock.NewStringResponse(http.StatusNotFound, "unknown operation"), nil
+		}
+		return httpmock.NewJsonResponse(http.StatusOK, map[string]any{
+			"data": map[string]any{"app": map[string]any{"byId": map[string]any{
+				"updateBranches": []map[string]any{{"id": "branch-1-id", "name": "branch-1"}},
+				"updateChannels": []map[string]any{
+					{"id": "broken-id", "name": "broken", "branchMapping": "not json"},
+					{
 						"id":            "staging-id",
+						"name":          "staging",
 						"branchMapping": `{"version":0,"data":[{"branchId":"branch-1-id","branchMappingLogic":"true"}]}`,
 					},
-				}}},
-			})
-		}
-		return httpmock.NewStringResponse(http.StatusNotFound, "unknown operation"), nil
+				},
+			}}},
+		})
 	})
-	return storage
+	return process
 }
 
 // bootServer serves what main serves and returns once /hc reports healthy,
@@ -111,17 +114,19 @@ func getManifest(server http.Handler) *httptest.ResponseRecorder {
 	return res
 }
 
-func TestFirstManifestAfterBootReadsNoStorage(t *testing.T) {
-	storage := startFreshProcess(t)
+func TestFirstManifestAfterBootReadsNoStorageAndCallsNoExpo(t *testing.T) {
+	process := startFreshProcess(t)
 	server := bootServer(t)
-	warmUpReads := storage.reads.Load()
+	warmUpReads, warmUpExpoCalls := process.storage.reads.Load(), process.expoCalls.Load()
 
 	res := getManifest(server)
-	manifestReads := storage.reads.Load() - warmUpReads
+	manifestReads := process.storage.reads.Load() - warmUpReads
 	t.Logf("bucket reads: boot warm-up=%d first manifest=%d", warmUpReads, manifestReads)
 	require.Equal(t, http.StatusOK, res.Code, res.Body.String())
 	require.Contains(t, res.Body.String(), `"launchAsset"`)
 	require.Zero(t, manifestReads, "the first manifest after boot must come from warm caches")
+	require.Equal(t, int32(1), warmUpExpoCalls, "the warm-up resolves every channel with one Expo call")
+	require.Equal(t, warmUpExpoCalls, process.expoCalls.Load(), "the first manifest after boot must not call Expo")
 }
 
 // holdExpo makes Expo calls fail, but only once release is called or the test ends.

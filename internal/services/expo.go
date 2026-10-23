@@ -376,27 +376,57 @@ func FetchExpoChannelMapping(channelName string) (*ExpoChannelMapping, error) {
 // fetchChannelMapping asks Expo once per channel, however many callers wait,
 // and caches the answer unless a remap happened since the fetch started.
 func fetchChannelMapping(channelName string) <-chan singleflight.Result {
-	cacheKey := ComputeChannelMappingCacheKey(channelName)
 	generation := channelMappingGeneration.Load()
-	return channelMappingFlight.DoChan(fmt.Sprintf("%s:%d", cacheKey, generation), func() (interface{}, error) {
+	return channelMappingFlight.DoChan(fmt.Sprintf("%s:%d", ComputeChannelMappingCacheKey(channelName), generation), func() (interface{}, error) {
 		mapping, err := queryExpoChannelMapping(channelName)
 		if err != nil {
 			log.Printf("[ChannelMapping] fetch failed for channel=%s: %v", channelName, err)
 			return nil, err
 		}
-		maxAge := channelMappingMaxAge
-		if mapping == nil {
-			maxAge = noChannelMappingMaxAge
-		}
-		ttl := int(maxAge / time.Second)
-		cacheValue, _ := json.Marshal(cachedChannelMapping{Mapping: mapping, FetchedAt: time.Now()})
-		channelMappingCacheMu.RLock()
-		defer channelMappingCacheMu.RUnlock()
-		if channelMappingGeneration.Load() == generation {
-			_ = cache2.GetCache().Set(cacheKey, string(cacheValue), &ttl)
-		}
+		storeChannelMapping(channelName, mapping, generation)
 		return mapping, nil
 	})
+}
+
+// storeChannelMapping caches a mapping fetched at generation, unless a remap
+// happened since.
+func storeChannelMapping(channelName string, mapping *ExpoChannelMapping, generation uint64) {
+	maxAge := channelMappingMaxAge
+	if mapping == nil {
+		maxAge = noChannelMappingMaxAge
+	}
+	ttl := int(maxAge / time.Second)
+	cacheValue, _ := json.Marshal(cachedChannelMapping{Mapping: mapping, FetchedAt: time.Now()})
+	channelMappingCacheMu.RLock()
+	defer channelMappingCacheMu.RUnlock()
+	if channelMappingGeneration.Load() == generation {
+		_ = cache2.GetCache().Set(ComputeChannelMappingCacheKey(channelName), string(cacheValue), &ttl)
+	}
+}
+
+// WarmChannelMappings caches the mapping of every channel with one Expo call
+// and returns the branches the channels serve.
+func WarmChannelMappings() ([]string, error) {
+	generation := channelMappingGeneration.Load()
+	ctx, cancel := context.WithTimeout(context.Background(), channelMappingTimeout)
+	defer cancel()
+	branches, channels, err := queryExpoBranchesAndChannels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var branchNames []string
+	for _, channel := range channels {
+		mapping, err := resolveChannelMapping(channel.ID, channel.BranchMapping, branches)
+		if err != nil {
+			log.Printf("[ChannelMapping] skipping channel=%s with unreadable branch mapping: %v", channel.Name, err)
+			continue
+		}
+		storeChannelMapping(channel.Name, mapping, generation)
+		if mapping != nil {
+			branchNames = append(branchNames, mapping.BranchName)
+		}
+	}
+	return branchNames, nil
 }
 
 // InvalidateChannelMapping drops the cached mapping after a remap, and stops
@@ -439,14 +469,8 @@ func queryExpoChannelMapping(channelName string) (*ExpoChannelMapping, error) {
 		Data struct {
 			App struct {
 				ById struct {
-					UpdateBranches []struct {
-						ID   string `json:"id"`
-						Name string `json:"name"`
-					} `json:"updateBranches"`
-					UpdateChannelByName struct {
-						ID            string `json:"id"`
-						BranchMapping string `json:"branchMapping"`
-					} `json:"updateChannelByName"`
+					UpdateBranches      []expoBranch           `json:"updateBranches"`
+					UpdateChannelByName expoChannelWithMapping `json:"updateChannelByName"`
 				} `json:"byId"`
 			} `json:"app"`
 		} `json:"data"`
@@ -467,16 +491,32 @@ func queryExpoChannelMapping(channelName string) (*ExpoChannelMapping, error) {
 	}
 	log.Printf("[TRACE] FetchExpoChannelMapping - GraphQL request completed in %v", time.Since(gqlStart))
 
-	log.Printf("[TRACE] FetchExpoChannelMapping - Parsing branch mapping at %s", time.Now().Format(time.RFC3339Nano))
 	channel := resp.Data.App.ById.UpdateChannelByName
+	return resolveChannelMapping(channel.ID, channel.BranchMapping, resp.Data.App.ById.UpdateBranches)
+}
+
+type expoBranch struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type expoChannelWithMapping struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	BranchMapping string `json:"branchMapping"`
+}
+
+// resolveChannelMapping returns the branch a channel serves: the first one its
+// branch mapping always selects. It returns nil when the channel serves none.
+func resolveChannelMapping(channelID, branchMappingJSON string, branches []expoBranch) (*ExpoChannelMapping, error) {
 	// Expo returns an empty object when a channel was deleted. Treat that as a
 	// missing mapping instead of attempting to unmarshal an empty string and
 	// turning an expired preview into a manifest 500.
-	if channel.ID == "" || channel.BranchMapping == "" {
+	if channelID == "" || branchMappingJSON == "" {
 		return nil, nil
 	}
 	var branchMapping BranchMapping
-	if err := json.Unmarshal([]byte(channel.BranchMapping), &branchMapping); err != nil {
+	if err := json.Unmarshal([]byte(branchMappingJSON), &branchMapping); err != nil {
 		return nil, err
 	}
 
@@ -492,25 +532,61 @@ func queryExpoChannelMapping(channelName string) (*ExpoChannelMapping, error) {
 		return nil, nil
 	}
 
-	var branchName string
-	for _, branch := range resp.Data.App.ById.UpdateBranches {
+	for _, branch := range branches {
 		if branch.ID == branchID {
-			branchName = branch.Name
-			break
+			return &ExpoChannelMapping{Id: channelID, BranchName: branch.Name}, nil
 		}
 	}
-	if branchName == "" {
-		return nil, nil
-	}
-
-	log.Printf("[TRACE] FetchExpoChannelMapping - Found branch mapping: branch=%s", branchName)
-	return &ExpoChannelMapping{
-		Id:         resp.Data.App.ById.UpdateChannelByName.ID,
-		BranchName: branchName,
-	}, nil
+	return nil, nil
 }
 
 func FetchExpoBranchesMapping() ([]ExpoBranchMapping, error) {
+	branches, channels, err := queryExpoBranchesAndChannels(context.Background())
+	if err != nil {
+		return nil, err
+	}
+
+	branchIDToChannels := make(map[string][]string)
+	for _, channel := range channels {
+		var mapping BranchMapping
+		if err := json.Unmarshal([]byte(channel.BranchMapping), &mapping); err != nil {
+			return nil, err
+		}
+
+		for _, m := range mapping.Data {
+			var logic string
+			if json.Unmarshal(m.BranchMappingLogic, &logic) == nil && logic == "true" {
+				branchIDToChannels[m.BranchId] = append(branchIDToChannels[m.BranchId], channel.Name)
+			}
+		}
+	}
+
+	var branchMappings []ExpoBranchMapping
+	for _, branch := range branches {
+		channelNames, found := branchIDToChannels[branch.ID]
+		if !found || len(channelNames) == 0 {
+			branchMappings = append(branchMappings, ExpoBranchMapping{
+				BranchName:  branch.Name,
+				BranchId:    branch.ID,
+				ChannelName: nil,
+			})
+			continue
+		}
+
+		for _, channelName := range channelNames {
+			cn := channelName
+			branchMappings = append(branchMappings, ExpoBranchMapping{
+				BranchName:  branch.Name,
+				BranchId:    branch.ID,
+				ChannelName: &cn,
+			})
+		}
+	}
+
+	return branchMappings, nil
+}
+
+func queryExpoBranchesAndChannels(ctx context.Context) ([]expoBranch, []expoChannelWithMapping, error) {
 	query := `
 		query FetchAppChannel($appId: String!) {
 			app {
@@ -543,65 +619,19 @@ func FetchExpoBranchesMapping() ([]ExpoBranchMapping, error) {
 		Data struct {
 			App struct {
 				ById struct {
-					UpdateBranches []struct {
-						ID   string `json:"id"`
-						Name string `json:"name"`
-					} `json:"updateBranches"`
-					UpdateChannels []struct {
-						ID            string `json:"id"`
-						Name          string `json:"name"`
-						BranchMapping string `json:"branchMapping"`
-					} `json:"updateChannels"`
+					UpdateBranches []expoBranch             `json:"updateBranches"`
+					UpdateChannels []expoChannelWithMapping `json:"updateChannels"`
 				} `json:"byId"`
 			} `json:"app"`
 		} `json:"data"`
 	}
 
-	ctx := context.Background()
 	if err := makeGraphQLRequest(ctx, query, variables, types.ExpoAuth{
 		Token: &expoToken,
 	}, &resp, headers); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-
-	branchIDToChannels := make(map[string][]string)
-	for _, channel := range resp.Data.App.ById.UpdateChannels {
-		var mapping BranchMapping
-		if err := json.Unmarshal([]byte(channel.BranchMapping), &mapping); err != nil {
-			return nil, err
-		}
-
-		for _, m := range mapping.Data {
-			var logic string
-			if json.Unmarshal(m.BranchMappingLogic, &logic) == nil && logic == "true" {
-				branchIDToChannels[m.BranchId] = append(branchIDToChannels[m.BranchId], channel.Name)
-			}
-		}
-	}
-
-	var branchMappings []ExpoBranchMapping
-	for _, branch := range resp.Data.App.ById.UpdateBranches {
-		channelNames, found := branchIDToChannels[branch.ID]
-		if !found || len(channelNames) == 0 {
-			branchMappings = append(branchMappings, ExpoBranchMapping{
-				BranchName:  branch.Name,
-				BranchId:    branch.ID,
-				ChannelName: nil,
-			})
-			continue
-		}
-
-		for _, channelName := range channelNames {
-			cn := channelName
-			branchMappings = append(branchMappings, ExpoBranchMapping{
-				BranchName:  branch.Name,
-				BranchId:    branch.ID,
-				ChannelName: &cn,
-			})
-		}
-	}
-
-	return branchMappings, nil
+	return resp.Data.App.ById.UpdateBranches, resp.Data.App.ById.UpdateChannels, nil
 }
 
 func CreateBranch(branch string) error {

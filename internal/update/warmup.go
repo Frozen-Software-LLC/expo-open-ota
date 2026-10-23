@@ -52,40 +52,23 @@ func StartBootWarmUp(deadline time.Duration) <-chan struct{} {
 }
 
 func activeManifestKeys() map[manifestKey]struct{} {
-	channels, err := services.FetchExpoChannels()
+	branches, err := services.WarmChannelMappings()
 	if err != nil {
-		log.Printf("[BootWarmUp] error listing channels: %v", err)
+		log.Printf("[BootWarmUp] error fetching channel mappings: %v", err)
 		return nil
 	}
-	var (
-		mu      sync.Mutex
-		keys    = map[manifestKey]struct{}{}
-		workers errgroup.Group
-	)
-	workers.SetLimit(bootWarmUpWorkers)
-	for _, channel := range channels {
-		workers.Go(func() error {
-			defer recoverWarmUpPanic()
-			// Resolves the channel the way /manifest does, and caches the mapping.
-			mapping, err := services.FetchExpoChannelMapping(channel.Name)
-			if err != nil || mapping == nil {
-				return nil
-			}
-			runtimeVersions, err := newestRuntimeVersions(mapping.BranchName)
-			if err != nil {
-				log.Printf("[BootWarmUp] error listing runtime versions for branch=%s: %v", mapping.BranchName, err)
-				return nil
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			for _, runtimeVersion := range runtimeVersions {
-				keys[manifestKey{mapping.BranchName, runtimeVersion, "ios"}] = struct{}{}
-				keys[manifestKey{mapping.BranchName, runtimeVersion, "android"}] = struct{}{}
-			}
-			return nil
-		})
+	keys := map[manifestKey]struct{}{}
+	for _, branch := range branches {
+		runtimeVersions, err := newestRuntimeVersions(branch)
+		if err != nil {
+			log.Printf("[BootWarmUp] error listing runtime versions for branch=%s: %v", branch, err)
+			continue
+		}
+		for _, runtimeVersion := range runtimeVersions {
+			keys[manifestKey{branch, runtimeVersion, "ios"}] = struct{}{}
+			keys[manifestKey{branch, runtimeVersion, "android"}] = struct{}{}
+		}
 	}
-	_ = workers.Wait()
 	return keys
 }
 
@@ -105,7 +88,7 @@ func newestRuntimeVersions(branch string) ([]string, error) {
 	return newest, nil
 }
 
-// errgroup does not recover panics, and a panic in any goroutine ends the process.
+// A panic in a goroutine ends the process.
 func recoverWarmUpPanic() {
 	if r := recover(); r != nil {
 		log.Printf("[BootWarmUp] panic recovered: %v", r)
