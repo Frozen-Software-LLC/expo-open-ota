@@ -3,6 +3,7 @@ package update
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,6 +12,8 @@ import (
 	"expo-open-ota/internal/bucket"
 	cache2 "expo-open-ota/internal/cache"
 	"expo-open-ota/internal/types"
+
+	"github.com/stretchr/testify/require"
 )
 
 // The short-circuit scan must pick the same update as the full filter, also
@@ -245,4 +248,124 @@ func TestLatestUpdateFlightEpochOnlyStoredOnTimeout(t *testing.T) {
 	if _, ok := latestUpdateFlightEpochs.Load(cacheKey); ok {
 		t.Fatal("timeout state stored for a key that never timed out")
 	}
+}
+
+const fakeScanDelay = 150 * time.Millisecond
+
+// ageLatestUpdate makes the cached latest update look older than the
+// freshness window and returns the value it left in the cache. On a cache
+// with only the 1800 s TTL, that is the first read after expiry.
+func ageLatestUpdate(t *testing.T, cacheKey string) string {
+	t.Helper()
+	cache2.GetCache().Delete(cacheKey)
+	return ""
+}
+
+// fakeLatestUpdateScan makes every scan take fakeScanDelay and find the update
+// whose ID head holds when the scan starts.
+func fakeLatestUpdateScan(t *testing.T, head *atomic.Value) *atomic.Int32 {
+	t.Helper()
+	var scans atomic.Int32
+	scanLatestUpdateFunc = func(branch, runtimeVersion, platform string) (*types.Update, error) {
+		updateId := head.Load().(string)
+		scans.Add(1)
+		time.Sleep(fakeScanDelay)
+		return &types.Update{Branch: branch, RuntimeVersion: runtimeVersion, UpdateId: updateId}, nil
+	}
+	t.Cleanup(func() { scanLatestUpdateFunc = scanLatestUpdate })
+	return &scans
+}
+
+func latestUpdateId() string {
+	latest, err := GetLatestUpdateBundlePathForRuntimeVersion("stale-branch", "1", "ios")
+	if err != nil || latest == nil {
+		return ""
+	}
+	return latest.UpdateId
+}
+
+func freshLatestUpdateKey(t *testing.T) string {
+	t.Helper()
+	cacheKey := ComputeLastUpdateCacheKey("stale-branch", "1", "ios")
+	cache2.GetCache().Delete(cacheKey)
+	t.Cleanup(func() { cache2.GetCache().Delete(cacheKey) })
+	return cacheKey
+}
+
+func waitForCacheChange(t *testing.T, key, old string) {
+	t.Helper()
+	require.Eventually(t, func() bool { return cache2.GetCache().Get(key) != old }, 5*time.Second, time.Millisecond)
+}
+
+func TestStaleLatestUpdateDoesNotWaitForScan(t *testing.T) {
+	cacheKey := freshLatestUpdateKey(t)
+	var head atomic.Value
+	head.Store("100")
+	scans := fakeLatestUpdateScan(t, &head)
+	require.Equal(t, "100", latestUpdateId())
+
+	latencies := make([]time.Duration, 7)
+	for i := range latencies {
+		aged := ageLatestUpdate(t, cacheKey)
+		before := scans.Load()
+		start := time.Now()
+		id := latestUpdateId()
+		latencies[i] = time.Since(start)
+		require.Equal(t, "100", id)
+		waitForCacheChange(t, cacheKey, aged)
+		require.Equal(t, before+1, scans.Load(), "one scan per stale read")
+	}
+	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	median := latencies[len(latencies)/2]
+	t.Logf("stale latest update read: median=%v range=%v..%v runs=%d scan-delay=%v", median, latencies[0], latencies[len(latencies)-1], len(latencies), fakeScanDelay)
+	require.Less(t, median, 10*time.Millisecond, "a stale read must not wait for the scan")
+}
+
+func TestStaleLatestUpdateRefreshIsVisibleLater(t *testing.T) {
+	cacheKey := freshLatestUpdateKey(t)
+	var head atomic.Value
+	head.Store("100")
+	fakeLatestUpdateScan(t, &head)
+	require.Equal(t, "100", latestUpdateId())
+
+	head.Store("200")
+	aged := ageLatestUpdate(t, cacheKey)
+	require.NotEmpty(t, latestUpdateId())
+	waitForCacheChange(t, cacheKey, aged)
+	require.Equal(t, "200", latestUpdateId())
+}
+
+// A publish during a background refresh wins: the next read scans again, and
+// the refresh that started before the publish never caches its older result.
+func TestPublishDuringStaleRefreshWins(t *testing.T) {
+	cacheKey := freshLatestUpdateKey(t)
+	var head atomic.Value
+	head.Store("100")
+	entered, release := make(chan struct{}), make(chan struct{})
+	var scans atomic.Int32
+	scanLatestUpdateFunc = func(branch, runtimeVersion, platform string) (*types.Update, error) {
+		updateId := head.Load().(string)
+		if scans.Add(1) == 2 {
+			close(entered)
+			<-release
+		}
+		return &types.Update{Branch: branch, RuntimeVersion: runtimeVersion, UpdateId: updateId}, nil
+	}
+	t.Cleanup(func() { scanLatestUpdateFunc = scanLatestUpdate })
+	require.Equal(t, "100", latestUpdateId())
+
+	ageLatestUpdate(t, cacheKey)
+	staleRead := make(chan string, 1)
+	go func() { staleRead <- latestUpdateId() }()
+	<-entered
+	head.Store("200")
+	// What MarkUpdateAsChecked does after it writes .check.
+	invalidateLatestUpdate(cacheKey)
+	require.Equal(t, "200", latestUpdateId(), "the read after a publish scans again")
+
+	close(release)
+	require.Equal(t, "100", <-staleRead)
+	require.Never(t, func() bool { return latestUpdateId() != "200" }, 100*time.Millisecond, 5*time.Millisecond,
+		"the refresh that started before the publish cached its result")
+	require.Equal(t, int32(3), scans.Load())
 }

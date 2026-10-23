@@ -113,6 +113,12 @@ func ResetBucketInstance() {
 	once = sync.Once{}
 }
 
+// SetBucketInstance makes GetBucket return b until ResetBucketInstance.
+func SetBucketInstance(b Bucket) {
+	bucketInstance = b
+	once = sync.Once{}
+}
+
 type FileUploadRequest struct {
 	RequestUploadUrl string `json:"requestUploadUrl"`
 	FileName         string `json:"fileName"`
