@@ -36,7 +36,15 @@ func TestLoggingMiddlewareRecordsHTTPMetrics(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 
+	previewChannel := httptest.NewRequest(http.MethodGet, "/ok", nil)
+	previewChannel.Header.Set("expo-channel-name", "preview-pr-42")
+	releaseChannel := httptest.NewRequest(http.MethodGet, "/ok", nil)
+	releaseChannel.Header.Set("expo-channel-name", "production")
+
 	for _, req := range []*http.Request{
+		previewChannel,
+		releaseChannel,
+		httptest.NewRequest(http.MethodGet, "/ok?branch=preview-pr-42", nil),
 		httptest.NewRequest(http.MethodGet, "/api/branch/a", nil),
 		httptest.NewRequest(http.MethodGet, "/api/branch/b", nil),
 		httptest.NewRequest(http.MethodGet, "/boom", nil),
@@ -50,10 +58,12 @@ func TestLoggingMiddlewareRecordsHTTPMetrics(t *testing.T) {
 	promhttp.Handler().ServeHTTP(out, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	body := out.Body.String()
 	for _, want := range []string{
-		`ota_http_request_duration_seconds_count{code="404",method="GET",route="/api/branch/{BRANCH}"} 2`,
-		`ota_http_request_duration_seconds_count{code="500",method="GET",route="/boom"} 1`,
-		`ota_http_request_duration_seconds_count{code="500",method="GET",route="/partial"} 1`,
-		`ota_http_request_duration_seconds_count{code="200",method="OTHER",route="/ok"} 1`,
+		`ota_http_request_duration_seconds_count{code="404",method="GET",preview="false",route="/api/branch/{BRANCH}"} 2`,
+		`ota_http_request_duration_seconds_count{code="500",method="GET",preview="false",route="/boom"} 1`,
+		`ota_http_request_duration_seconds_count{code="500",method="GET",preview="false",route="/partial"} 1`,
+		`ota_http_request_duration_seconds_count{code="200",method="OTHER",preview="false",route="/ok"} 1`,
+		`ota_http_request_duration_seconds_count{code="200",method="GET",preview="true",route="/ok"} 2`,
+		`ota_http_request_duration_seconds_count{code="200",method="GET",preview="false",route="/ok"} 1`,
 		`ota_http_requests_in_flight 0`,
 	} {
 		if !strings.Contains(body, want) {
