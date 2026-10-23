@@ -10,7 +10,11 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 type AssetsRequest struct {
@@ -45,21 +49,56 @@ func ResolveUpdate(req AssetsRequest) (*types.Update, error) {
 	}
 	// A manifest may reference many assets. Avoid re-reading validation objects
 	// from storage for every file while keeping removal checks short-lived.
-	key := fmt.Sprintf("pinnedAssetUpdate:v1:%s:%s:%s:%s", req.Branch, req.RuntimeVersion, req.Platform, req.UpdateID)
-	resolvedCache := cache.GetCache()
-	if resolvedCache.Get(key) == "valid" {
+	key := pinnedUpdateKey(req)
+	if checkedAt, err := strconv.ParseInt(cache.GetCache().Get(key), 10, 64); err == nil {
+		if time.Since(time.Unix(checkedAt, 0)) >= pinnedUpdateFreshFor {
+			// Answer now; one background check per key re-reads storage.
+			pinnedUpdateChecks.DoChan(key, func() (interface{}, error) {
+				return nil, checkPinnedUpdate(key, *target, req.Platform)
+			})
+		}
 		return target, nil
 	}
-	if !update.IsUpdateValid(*target) || update.GetUpdateType(*target) != types.NormalUpdate {
-		return nil, fmt.Errorf("invalid target update")
+	_, err, _ = pinnedUpdateChecks.Do(key, func() (interface{}, error) {
+		return nil, checkPinnedUpdate(key, *target, req.Platform)
+	})
+	if err != nil {
+		return nil, err
 	}
-	metadata, err := update.RetrieveUpdateStoredMetadata(*target)
-	if err != nil || metadata == nil || metadata.Platform != req.Platform {
-		return nil, fmt.Errorf("target platform mismatch")
-	}
-	ttl := 60
-	_ = resolvedCache.Set(key, "valid", &ttl)
 	return target, nil
+}
+
+// A checked update older than this is still answered, while one background
+// check replaces it. A removed update is answered until that check ends.
+var pinnedUpdateFreshFor = time.Minute
+
+var pinnedUpdateChecks singleflight.Group
+
+func pinnedUpdateKey(req AssetsRequest) string {
+	return fmt.Sprintf("pinnedAssetUpdate:v2:%s:%s:%s:%s", req.Branch, req.RuntimeVersion, req.Platform, req.UpdateID)
+}
+
+func checkPinnedUpdate(key string, target types.Update, platform string) error {
+	checked, err := update.HasUpdateBeenChecked(target)
+	if err != nil {
+		// A failed read keeps the last answer, for at most the key's TTL.
+		return fmt.Errorf("invalid target update")
+	}
+	if !checked || update.GetUpdateType(target) != types.NormalUpdate {
+		cache.GetCache().Delete(key)
+		return fmt.Errorf("invalid target update")
+	}
+	metadata, err := update.RetrieveUpdateStoredMetadata(target)
+	if err != nil {
+		return fmt.Errorf("target platform mismatch")
+	}
+	if metadata == nil || metadata.Platform != platform {
+		cache.GetCache().Delete(key)
+		return fmt.Errorf("target platform mismatch")
+	}
+	ttl := 1800
+	_ = cache.GetCache().Set(key, strconv.FormatInt(time.Now().Unix(), 10), &ttl)
+	return nil
 }
 
 func getAssetMetadata(req AssetsRequest, returnAsset bool) (AssetsResponse, *types.BucketFile, string, error) {
