@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -53,9 +54,14 @@ func ResolveUpdate(req AssetsRequest) (*types.Update, error) {
 	if checked, ok := readPinnedUpdateCheck(key); ok {
 		if !time.Now().Before(checked.RefreshAt) {
 			// Answer now; one background check per key re-reads storage.
-			pinnedUpdateChecks.DoChan(key, func() (interface{}, error) {
-				return nil, checkPinnedUpdate(key, *target, req.Platform, checked.ExpiresAt)
-			})
+			if _, running := pinnedUpdateRefreshing.LoadOrStore(key, struct{}{}); !running {
+				go func() {
+					defer pinnedUpdateRefreshing.Delete(key)
+					_, _, _ = pinnedUpdateChecks.Do(key, func() (interface{}, error) {
+						return nil, checkPinnedUpdate(key, *target, req.Platform, checked.ExpiresAt)
+					})
+				}()
+			}
 		}
 		return target, nil
 	}
@@ -75,7 +81,12 @@ var pinnedUpdateFreshFor = time.Minute
 
 const pinnedUpdateMaxAge = 30 * time.Minute
 
-var pinnedUpdateChecks singleflight.Group
+var (
+	pinnedUpdateChecks singleflight.Group
+	// Keys with a background check running. Stale requests do not wait on it,
+	// so they must not join the flight: each joined caller holds a channel.
+	pinnedUpdateRefreshing sync.Map
+)
 
 type pinnedUpdateCheck struct {
 	RefreshAt time.Time `json:"refreshAt"`

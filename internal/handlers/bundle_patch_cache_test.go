@@ -122,8 +122,7 @@ func TestPatchObjectCacheKeepsLastAnswerWhenStorageFails(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		_, _ = c.get("error", load)
 	}
-	// Joining the flight waits for a background read that the loop started.
-	_, _, _ = c.flights.Do("error", func() (any, error) { return nil, nil })
+	require.Eventually(t, func() bool { _, running := c.refreshing.Load("error"); return !running }, 5*time.Second, time.Millisecond)
 	require.Equal(t, afterFailure, reads.Load(), "a failed refresh waits before the next read")
 	clock.advance(patchLookupTTL)
 	_, _ = c.get("error", load)

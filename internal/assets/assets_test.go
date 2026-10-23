@@ -56,6 +56,14 @@ func makeChecksStale(t *testing.T) {
 	t.Cleanup(func() { pinnedUpdateFreshFor = freshFor })
 }
 
+func waitForBackgroundCheck(t *testing.T) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		_, running := pinnedUpdateRefreshing.Load(pinnedUpdateKey(pinnedRequest))
+		return !running
+	}, 5*time.Second, time.Millisecond)
+}
+
 var pinnedRequest = AssetsRequest{Branch: "branch-1", RuntimeVersion: "1", Platform: "android", UpdateID: "1674170951"}
 
 func TestStalePinnedUpdateIsAnsweredWithoutWaitingForStorage(t *testing.T) {
@@ -66,8 +74,8 @@ func TestStalePinnedUpdateIsAnsweredWithoutWaitingForStorage(t *testing.T) {
 	storage.held.Store(true)
 	defer func() {
 		close(storage.release)
-		// Wait for the background check, which reads the global bucket.
-		_, _, _ = pinnedUpdateChecks.Do(pinnedUpdateKey(pinnedRequest), func() (interface{}, error) { return nil, nil })
+		// The background check reads the global bucket.
+		waitForBackgroundCheck(t)
 	}()
 	readsBefore := storage.reads.Load()
 
@@ -107,15 +115,14 @@ func TestFailedPinnedUpdateCheckKeepsAnswerAndWaitsBeforeNextRead(t *testing.T) 
 
 	_, err = ResolveUpdate(pinnedRequest)
 	require.NoError(t, err)
-	// Joining the flight waits for the background check to end.
-	_, _, _ = pinnedUpdateChecks.Do(pinnedUpdateKey(pinnedRequest), func() (interface{}, error) { return nil, nil })
+	waitForBackgroundCheck(t)
 	readsAfterCheck := storage.reads.Load()
 	require.Greater(t, readsAfterCheck, readsBefore, "the stale answer started a check")
 	for i := 0; i < 10; i++ {
 		_, err = ResolveUpdate(pinnedRequest)
 		require.NoError(t, err, "a failed read keeps the last answer")
 	}
-	_, _, _ = pinnedUpdateChecks.Do(pinnedUpdateKey(pinnedRequest), func() (interface{}, error) { return nil, nil })
+	waitForBackgroundCheck(t)
 	require.Equal(t, readsAfterCheck, storage.reads.Load(), "a failed check waits before the next read")
 }
 

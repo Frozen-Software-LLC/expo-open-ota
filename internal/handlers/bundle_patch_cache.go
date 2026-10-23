@@ -40,6 +40,9 @@ type patchObjectCache struct {
 	bytes   int
 	now     func() time.Time
 	flights singleflight.Group
+	// Keys with a background read running. Stale requests do not wait on it,
+	// so they must not join the flight: each joined caller holds a channel.
+	refreshing sync.Map
 }
 
 func newPatchObjectCache(now func() time.Time) *patchObjectCache {
@@ -75,7 +78,12 @@ func (c *patchObjectCache) get(key string, load func() ([]byte, error)) ([]byte,
 	}
 	if e, ok := c.lookup(key); ok {
 		if !c.fresh(e) {
-			c.flights.DoChan(key, func() (any, error) { return c.load(key, load) })
+			if _, running := c.refreshing.LoadOrStore(key, struct{}{}); !running {
+				go func() {
+					defer c.refreshing.Delete(key)
+					_, _, _ = c.flights.Do(key, func() (any, error) { return c.load(key, load) })
+				}()
+			}
 		}
 		return resolve(e)
 	}
