@@ -169,7 +169,7 @@ func MockExpoBranchesResponse(updateBranches []map[string]interface{}) (*http.Re
 func MockExpoAccountResponse(me map[string]interface{}) (*http.Response, error) {
 	return httpmock.NewJsonResponse(http.StatusOK, map[string]interface{}{
 		"data": map[string]interface{}{
-			"me": me,
+			"meActor": me,
 		},
 	})
 }

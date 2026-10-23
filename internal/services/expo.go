@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -62,9 +63,16 @@ func ValidateExpoAuth(expoAuth types.ExpoAuth) (*ExpoUserAccount, error) {
 	if expoAccount == nil {
 		return nil, errors.New("no expo account found")
 	}
-	selfExpoUsername := FetchSelfExpoUsername()
-	if selfExpoUsername != expoAccount.Username {
-		return nil, errors.New("expo account does not match self expo username")
+	selfToken := GetExpoAccessToken()
+	if selfToken == "" {
+		return nil, errors.New("server Expo access token is not configured")
+	}
+	selfExpoAccount, err := FetchExpoUserAccountInformations(types.ExpoAuth{Token: &selfToken})
+	if err != nil {
+		return nil, fmt.Errorf("could not resolve server Expo actor: %w", err)
+	}
+	if selfExpoAccount.Id != expoAccount.Id {
+		return nil, errors.New("expo actor does not match server expo actor")
 	}
 	return expoAccount, nil
 }
@@ -271,21 +279,26 @@ func FetchExpoBranches() ([]string, error) {
 	return branches, nil
 }
 
+// Users and Robots both have an actor ID; only Users have username/email fields.
 func FetchExpoUserAccountInformations(expoAuth types.ExpoAuth) (*ExpoUserAccount, error) {
 	query := `
 		query GetCurrentUserAccount {
-			me {
+			meActor {
 				id
-				username
-				email
+				__typename
+				... on User {
+					username
+					email
+				}
 			}
 		}
 	`
 
 	var resp struct {
 		Data struct {
-			Me ExpoUserAccount `json:"me"`
+			MeActor *ExpoUserAccount `json:"meActor"`
 		} `json:"data"`
+		Errors []json.RawMessage `json:"errors"`
 	}
 
 	headers := map[string]string{}
@@ -298,7 +311,13 @@ func FetchExpoUserAccountInformations(expoAuth types.ExpoAuth) (*ExpoUserAccount
 		return nil, err
 	}
 
-	return &resp.Data.Me, nil
+	if len(resp.Errors) > 0 {
+		return nil, errors.New("Expo actor query returned GraphQL errors")
+	}
+	if resp.Data.MeActor == nil || strings.TrimSpace(resp.Data.MeActor.Id) == "" {
+		return nil, errors.New("no Expo actor ID found")
+	}
+	return resp.Data.MeActor, nil
 }
 
 func FetchSelfExpoUsername() string {

@@ -26,6 +26,12 @@ and allow the server to fetch the release channel-to-branch mappings.
 This token will be used as the `EXPO_ACCESS_TOKEN` environment variable.
 :::
 
+Personal access tokens and Robot tokens are supported. The publishing client's
+`EXPO_TOKEN` must identify the same Expo actor as the server's `EXPO_ACCESS_TOKEN`.
+Different token values for the same user or Robot are allowed; membership in the
+same organization alone does not authorize publishing. When switching to a Robot,
+update the publishing clients to use tokens for that same Robot.
+
 ### How to Get Your Project ID
 
 #### From EAS CLI
