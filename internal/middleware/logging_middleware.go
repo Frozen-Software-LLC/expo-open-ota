@@ -44,7 +44,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 					r.Method, r.RequestURI, r.URL.RawQuery, safeHeaders, err, debug.Stack())
 				http.Error(recorder, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			}
-			metrics.TrackHTTPRequest(routeTemplate(r), r.Method, recorder.statusCode, time.Since(start))
+			metrics.TrackHTTPRequest(routeTemplate(r), r.Method, recorder.statusCode, isPreviewRequest(r), time.Since(start))
 		}()
 
 		next.ServeHTTP(recorder, r)
@@ -54,6 +54,12 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		}
 		log.Printf("Completed %s %d in %v", r.RequestURI, recorder.statusCode, time.Since(start))
 	})
+}
+
+// Asset requests can name the branch instead of the channel.
+func isPreviewRequest(r *http.Request) bool {
+	return strings.HasPrefix(r.Header.Get("expo-channel-name"), "preview-pr-") ||
+		strings.HasPrefix(r.URL.Query().Get("branch"), "preview-pr-")
 }
 
 func routeTemplate(r *http.Request) string {
