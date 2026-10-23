@@ -210,7 +210,11 @@ func TestHealthCheckPassesOnceUserBranchesAreWarm(t *testing.T) {
 
 	require.Eventually(t, func() bool { return get(server, "/hc").Code == http.StatusOK }, 5*time.Second, time.Millisecond,
 		"a slow preview branch does not hold /hc")
-	<-storage.listed
+	select {
+	case <-storage.listed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("preview branches are warmed after /hc passes")
+	}
 	readsBefore := process.storage.reads.Load()
 	res := getManifest(server)
 	require.Equal(t, http.StatusOK, res.Code, res.Body.String())
