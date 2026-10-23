@@ -3,6 +3,7 @@ package infrastructure
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -66,6 +67,30 @@ func startFreshProcess(t *testing.T) *fakeProcess {
 
 	httpmock.Activate()
 	t.Cleanup(httpmock.DeactivateAndReset)
+	serveExpoChannels(process, nil)
+	return process
+}
+
+// serveExpoChannels answers the warm-up's Expo query with the staging and
+// broken channels, plus extra channels that map to branches with their names.
+func serveExpoChannels(process *fakeProcess, extra []string) {
+	branches := []map[string]any{{"id": "branch-1-id", "name": "branch-1"}}
+	channels := []map[string]any{
+		{"id": "broken-id", "name": "broken", "branchMapping": "not json"},
+		{
+			"id":            "staging-id",
+			"name":          "staging",
+			"branchMapping": `{"version":0,"data":[{"branchId":"branch-1-id","branchMappingLogic":"true"}]}`,
+		},
+	}
+	for _, name := range extra {
+		branches = append(branches, map[string]any{"id": name + "-id", "name": name})
+		channels = append(channels, map[string]any{
+			"id":            name + "-channel-id",
+			"name":          name,
+			"branchMapping": `{"version":0,"data":[{"branchId":"` + name + `-id","branchMappingLogic":"true"}]}`,
+		})
+	}
 	httpmock.RegisterResponder(http.MethodPost, "https://api.expo.dev/graphql", func(req *http.Request) (*http.Response, error) {
 		process.expoCalls.Add(1)
 		if req.Header.Get("operationName") != "FetchExpoBranches" {
@@ -73,19 +98,11 @@ func startFreshProcess(t *testing.T) *fakeProcess {
 		}
 		return httpmock.NewJsonResponse(http.StatusOK, map[string]any{
 			"data": map[string]any{"app": map[string]any{"byId": map[string]any{
-				"updateBranches": []map[string]any{{"id": "branch-1-id", "name": "branch-1"}},
-				"updateChannels": []map[string]any{
-					{"id": "broken-id", "name": "broken", "branchMapping": "not json"},
-					{
-						"id":            "staging-id",
-						"name":          "staging",
-						"branchMapping": `{"version":0,"data":[{"branchId":"branch-1-id","branchMappingLogic":"true"}]}`,
-					},
-				},
+				"updateBranches": branches,
+				"updateChannels": channels,
 			}}},
 		})
 	})
-	return process
 }
 
 // bootServer serves what main serves and returns once /hc reports healthy,
@@ -163,6 +180,31 @@ func TestHealthCheckPassesAfterDeadlineWhenWarmUpHangs(t *testing.T) {
 
 	require.Equal(t, http.StatusServiceUnavailable, get(server, "/hc").Code)
 	require.Eventually(t, func() bool { return get(server, "/hc").Code == http.StatusOK }, 2*time.Second, time.Millisecond)
+}
+
+// prBranchBucket fails the test when the warm-up lists a PR branch.
+type prBranchBucket struct {
+	*countingBucket
+	t *testing.T
+}
+
+func (b *prBranchBucket) GetRuntimeVersions(branch string) ([]bucket.RuntimeVersionWithStats, error) {
+	if strings.Contains(branch, "-pr-") {
+		b.t.Errorf("the boot warm-up listed PR branch %s", branch)
+	}
+	return b.countingBucket.GetRuntimeVersions(branch)
+}
+
+func TestBootWarmUpSkipsPRBranches(t *testing.T) {
+	process := startFreshProcess(t)
+	serveExpoChannels(process, []string{"preview-pr-1", "revyl-pr-2"})
+	bucket.SetBucketInstance(&prBranchBucket{countingBucket: process.storage, t: t})
+	server := bootServer(t)
+	readsBefore := process.storage.reads.Load()
+
+	res := getManifest(server)
+	require.Equal(t, http.StatusOK, res.Code, res.Body.String())
+	require.Equal(t, readsBefore, process.storage.reads.Load(), "the user branch was warm before /hc passed")
 }
 
 type panickingBucket struct{ bucket.Bucket }

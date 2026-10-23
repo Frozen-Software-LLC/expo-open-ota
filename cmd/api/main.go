@@ -30,7 +30,7 @@ func main() {
 		return
 	}
 	migration.RunMigrationsWithLock()
-	router := infrastructure.HoldHealthCheck(update.StartBootWarmUp(20*time.Second), infrastructure.NewRouter())
+	router := infrastructure.HoldHealthCheck(update.StartBootWarmUp(3*time.Minute), infrastructure.NewRouter())
 	log.Println("Server is running on port " + config.GetPort())
 	corsOptions := handlers.CORS(
 		handlers.AllowedHeaders([]string{"Authorization", "Content-Type"}),

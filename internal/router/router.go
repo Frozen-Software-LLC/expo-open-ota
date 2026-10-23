@@ -19,8 +19,9 @@ func HealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// HoldHealthCheck answers /hc with 503 until ready closes. Render sends a new
-// instance traffic only once /hc returns 200.
+// HoldHealthCheck answers /hc with 503 until ready closes. During a deploy,
+// Render sends a new instance traffic only once /hc returns 200, and keeps the
+// old instance serving for up to 15 minutes until then.
 func HoldHealthCheck(ready <-chan struct{}, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/hc" {

@@ -6,6 +6,7 @@ import (
 	"log"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,8 +27,9 @@ type manifestKey struct {
 
 // StartBootWarmUp fills the caches that the first device requests after a
 // restart need: each channel's mapping, and the manifests of the newest
-// runtime versions of every branch a channel maps to. The returned channel
-// closes when the warm-up ends or the deadline passes, whichever is first.
+// runtime versions of every user branch a channel maps to. The returned
+// channel closes when the warm-up ends or the deadline passes, whichever is
+// first.
 func StartBootWarmUp(deadline time.Duration) <-chan struct{} {
 	ready := make(chan struct{})
 	var once sync.Once
@@ -37,42 +39,54 @@ func StartBootWarmUp(deadline time.Duration) <-chan struct{} {
 		defer markReady()
 		defer recoverWarmUpPanic()
 		start := time.Now()
-		keys := activeManifestKeys()
-		var workers errgroup.Group
-		workers.SetLimit(bootWarmUpWorkers)
-		for key := range keys {
-			workers.Go(func() error {
-				PreWarmManifestCache(key.branch, key.runtimeVersion, key.platform)
-				return nil
-			})
+		branches, err := services.WarmChannelMappings()
+		if err != nil {
+			log.Printf("[BootWarmUp] error fetching channel mappings: %v", err)
+			return
 		}
-		_ = workers.Wait()
+		keys := manifestKeys(userBranches(branches))
+		warmManifests(keys)
 		log.Printf("[BootWarmUp] warmed %d manifest keys in %v", len(keys), time.Since(start))
 	}()
 	return ready
 }
 
-func activeManifestKeys() map[manifestKey]struct{} {
-	branches, err := services.WarmChannelMappings()
-	if err != nil {
-		log.Printf("[BootWarmUp] error fetching channel mappings: %v", err)
-		return nil
-	}
-	// Several channels can serve one branch.
+// userBranches lists each branch once; several channels can serve one branch.
+// PR branches (preview-pr-*, revyl-pr-*) serve PR builds to the team. There are
+// many of them and they get little traffic, so their first request builds the
+// manifest instead of the warm-up.
+func userBranches(branches []string) []string {
 	slices.Sort(branches)
-	keys := map[manifestKey]struct{}{}
-	for _, branch := range slices.Compact(branches) {
+	return slices.DeleteFunc(slices.Compact(branches), func(branch string) bool {
+		return strings.Contains(branch, "-pr-")
+	})
+}
+
+func manifestKeys(branches []string) []manifestKey {
+	var keys []manifestKey
+	for _, branch := range branches {
 		runtimeVersions, err := newestRuntimeVersions(branch)
 		if err != nil {
 			log.Printf("[BootWarmUp] error listing runtime versions for branch=%s: %v", branch, err)
 			continue
 		}
 		for _, runtimeVersion := range runtimeVersions {
-			keys[manifestKey{branch, runtimeVersion, "ios"}] = struct{}{}
-			keys[manifestKey{branch, runtimeVersion, "android"}] = struct{}{}
+			keys = append(keys, manifestKey{branch, runtimeVersion, "ios"}, manifestKey{branch, runtimeVersion, "android"})
 		}
 	}
 	return keys
+}
+
+func warmManifests(keys []manifestKey) {
+	var workers errgroup.Group
+	workers.SetLimit(bootWarmUpWorkers)
+	for _, key := range keys {
+		workers.Go(func() error {
+			PreWarmManifestCache(key.branch, key.runtimeVersion, key.platform)
+			return nil
+		})
+	}
+	_ = workers.Wait()
 }
 
 func newestRuntimeVersions(branch string) ([]string, error) {
