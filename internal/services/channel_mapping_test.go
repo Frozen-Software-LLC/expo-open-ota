@@ -178,10 +178,11 @@ func TestRemapDuringChannelMappingRefresh(t *testing.T) {
 
 	close(release)
 	require.NoError(t, <-staleRead)
-	require.Never(t, func() bool {
+	for deadline := time.Now().Add(3 * fakeExpoDelay); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
 		mapping, err := FetchExpoChannelMapping(testChannel)
-		return err != nil || mapping.BranchName != "branch-2"
-	}, 3*fakeExpoDelay, 5*time.Millisecond, "the pre-remap refresh wrote the old mapping")
+		require.NoError(t, err)
+		require.Equal(t, "branch-2", mapping.BranchName, "the pre-remap refresh wrote the old mapping")
+	}
 }
 
 func TestNoChannelMappingIsNeverServedStale(t *testing.T) {
