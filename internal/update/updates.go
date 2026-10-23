@@ -17,7 +17,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 func sortUpdates(updates []types.Update) []types.Update {
@@ -99,6 +102,11 @@ func MarkUpdateAsChecked(update types.Update) error {
 	if err := resolvedBucket.UploadFileIntoUpdate(update, ".check", reader); err != nil {
 		return err
 	}
+	// A scan that ran before .check existed can have cached the previous update.
+	// Advance the generation before the delete, so a scan still in flight drops
+	// its write and new requests start a new scan.
+	latestUpdateGeneration.Add(1)
+	cache.Delete(ComputeLastUpdateCacheKey(update.Branch, update.RuntimeVersion, storedMetadata.Platform))
 	QueueBundlePatches(update)
 	queueManifestPreWarm(update.Branch, update.RuntimeVersion, "ios")
 	queueManifestPreWarm(update.Branch, update.RuntimeVersion, "android")
@@ -247,32 +255,78 @@ func GetLatestUpdateBundlePathForRuntimeVersion(branch string, runtimeVersion st
 	}
 	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Cache miss in %v", time.Since(cacheStart))
 
-	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Fetching all updates at %s", time.Now().Format(time.RFC3339Nano))
-	getAllStart := time.Now()
-	updates, err := GetAllUpdatesForRuntimeVersion(branch, runtimeVersion, platform)
-	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - GetAllUpdatesForRuntimeVersion completed in %v", time.Since(getAllStart))
+	// A publish deletes this key, so every polling device misses at once. One scan
+	// runs per key; the rest wait for its result instead of each scanning the bucket.
+	// The flight key holds the publish generation, so a request made after a
+	// publish never joins a scan that started before it.
+	generation := latestUpdateGeneration.Load()
+	result, err, _ := latestUpdateFlight.Do(fmt.Sprintf("%s:%d", cacheKey, generation), func() (interface{}, error) {
+		// A caller that missed just before the previous flight filled the cache.
+		if cachedValue := cache.Get(cacheKey); cachedValue != "" {
+			var update types.Update
+			if err := json.Unmarshal([]byte(cachedValue), &update); err == nil {
+				return &update, nil
+			}
+		}
+		latest, err := scanLatestUpdateFunc(branch, runtimeVersion, platform)
+		if err != nil || latest == nil {
+			return latest, err
+		}
+		if cacheValue, err := json.Marshal(latest); err == nil {
+			ttl := 1800
+			_ = cache.Set(cacheKey, string(cacheValue), &ttl)
+			// A publish during the scan already deleted the key; drop this stale write.
+			if latestUpdateGeneration.Load() != generation {
+				cache.Delete(cacheKey)
+			}
+		}
+		return latest, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Filtering %d updates at %s", len(updates), time.Now().Format(time.RFC3339Nano))
-	filterStart := time.Now()
-	filteredUpdates := make([]types.Update, 0)
-	for _, update := range updates {
-		if IsUpdateValid(update) {
-			filteredUpdates = append(filteredUpdates, update)
-		}
+	latest := result.(*types.Update)
+	if latest == nil {
+		return nil, nil
 	}
-	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Filtering completed in %v, found %d valid updates", time.Since(filterStart), len(filteredUpdates))
+	latestCopy := *latest
+	return &latestCopy, nil
+}
 
-	if len(filteredUpdates) > 0 {
-		cacheValue, err := json.Marshal(filteredUpdates[0])
-		if err != nil {
-			return &filteredUpdates[0], nil
+var (
+	latestUpdateFlight singleflight.Group
+	// Incremented by every publish. ponytail: process-local, so with a shared
+	// cache a scan on another replica can still re-cache the old update.
+	latestUpdateGeneration atomic.Uint64
+	scanLatestUpdateFunc   = scanLatestUpdate
+)
+
+func scanLatestUpdate(branch string, runtimeVersion string, platform string) (*types.Update, error) {
+	// List the runtime's updates (the bucket derives CreatedAt from the updateId, so
+	// we can sort newest-first WITHOUT reading any per-update metadata) and scan once,
+	// reading update-metadata.json + .check only until the first update that matches
+	// the platform AND is valid. That update is the latest (newest-first order), so
+	// the result is identical to filtering+validating every update — but a cold cache
+	// miss now does O(1) bucket reads in the common case (newest update matches)
+	// instead of O(N) (N=82 for an active runtime). The previous code read metadata
+	// for every update (filterPlatformUpdates) AND .check for every update, so a
+	// foreground herd at the 1800s lastUpdate TTL expiry stampeded the origin.
+	resolvedBucket := bucket.GetBucket()
+	updates, err := resolvedBucket.GetUpdates(branch, runtimeVersion)
+	if err != nil {
+		return nil, err
+	}
+	updates = sortUpdates(updates)
+	for i := range updates {
+		storedMetadata, metaErr := RetrieveUpdateStoredMetadata(updates[i])
+		if metaErr != nil || storedMetadata == nil || storedMetadata.Platform != platform {
+			continue
 		}
-		ttl := 1800
-		err = cache.Set(cacheKey, string(cacheValue), &ttl)
-		return &filteredUpdates[0], nil
+		if !IsUpdateValid(updates[i]) {
+			continue
+		}
+		latest := updates[i]
+		return &latest, nil
 	}
 	return nil, nil
 }
@@ -303,12 +357,32 @@ func GetUpdateBundlePathForRuntimeVersionAndUUID(branch string, runtimeVersion s
 	return matched, nil
 }
 
+// An update's type never changes once it is checked: CreateRollback writes the
+// rollback marker before .check. The TTL only reclaims cache storage.
+const updateTypeCacheTTLSeconds = 7 * 24 * 3600
+
 func GetUpdateType(update types.Update) types.UpdateType {
+	cache := cache2.GetCache()
+	cacheKey := fmt.Sprintf("updateType:%s:%s:%s:%s", version.Version, update.Branch, update.RuntimeVersion, update.UpdateId)
+	switch cache.Get(cacheKey) {
+	case "rollback":
+		return types.Rollback
+	case "normal":
+		return types.NormalUpdate
+	}
+	ttl := updateTypeCacheTTLSeconds
+	// Read .check first: a rollback that is still being written has no marker
+	// yet, and only a marker read after .check exists is final.
+	checked := IsUpdateValid(update)
 	resolvedBucket := bucket.GetBucket()
-	file, _ := resolvedBucket.GetFile(update, "rollback")
+	file, err := resolvedBucket.GetFile(update, "rollback")
 	if file != nil {
 		file.Reader.Close()
+		_ = cache.Set(cacheKey, "rollback", &ttl)
 		return types.Rollback
+	}
+	if err == nil && checked {
+		_ = cache.Set(cacheKey, "normal", &ttl)
 	}
 	return types.NormalUpdate
 }
