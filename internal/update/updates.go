@@ -103,10 +103,7 @@ func MarkUpdateAsChecked(update types.Update) error {
 		return err
 	}
 	// A scan that ran before .check existed can have cached the previous update.
-	// Advance the generation before the delete, so a scan still in flight drops
-	// its write and new requests start a new scan.
-	latestUpdateGeneration.Add(1)
-	cache.Delete(ComputeLastUpdateCacheKey(update.Branch, update.RuntimeVersion, storedMetadata.Platform))
+	invalidateLatestUpdate(ComputeLastUpdateCacheKey(update.Branch, update.RuntimeVersion, storedMetadata.Platform))
 	QueueBundlePatches(update)
 	queueManifestPreWarm(update.Branch, update.RuntimeVersion, "ios")
 	queueManifestPreWarm(update.Branch, update.RuntimeVersion, "android")
@@ -258,9 +255,12 @@ func GetLatestUpdateBundlePathForRuntimeVersion(branch string, runtimeVersion st
 	// A publish deletes this key, so every polling device misses at once. One scan
 	// runs per key; the rest wait for its result instead of each scanning the bucket.
 	// The flight key holds the publish generation, so a request made after a
-	// publish never joins a scan that started before it.
+	// publish never joins a scan that started before it, and the timeout epoch,
+	// so a request made after a timeout never joins the stuck scan.
 	generation := latestUpdateGeneration.Load()
-	flightKey := fmt.Sprintf("%s:%d", cacheKey, generation)
+	epoch := latestUpdateFlightEpoch(cacheKey)
+	epochValue := epoch.Load()
+	flightKey := fmt.Sprintf("%s:%d:%d", cacheKey, generation, epochValue)
 	flight := latestUpdateFlight.DoChan(flightKey, func() (interface{}, error) {
 		// A caller that missed just before the previous flight filled the cache.
 		if cachedValue := cache.Get(cacheKey); cachedValue != "" {
@@ -273,17 +273,17 @@ func GetLatestUpdateBundlePathForRuntimeVersion(branch string, runtimeVersion st
 		if err != nil || latest == nil {
 			return latest, err
 		}
-		// A publish during the scan already deleted the key; do not write the old
-		// result. Check again after Set for a publish between the check and the Set.
-		if latestUpdateGeneration.Load() != generation {
+		cacheValue, err := json.Marshal(latest)
+		if err != nil {
 			return latest, nil
 		}
-		if cacheValue, err := json.Marshal(latest); err == nil {
+		// A publish during the scan already deleted the key; do not write the old
+		// result. The read lock keeps a publish out between the check and the Set.
+		latestUpdateCacheMu.RLock()
+		defer latestUpdateCacheMu.RUnlock()
+		if latestUpdateGeneration.Load() == generation {
 			ttl := 1800
 			_ = cache.Set(cacheKey, string(cacheValue), &ttl)
-			if latestUpdateGeneration.Load() != generation {
-				cache.Delete(cacheKey)
-			}
 		}
 		return latest, nil
 	})
@@ -291,9 +291,11 @@ func GetLatestUpdateBundlePathForRuntimeVersion(branch string, runtimeVersion st
 	select {
 	case result = <-flight:
 	case <-time.After(latestUpdateScanTimeout):
-		// Bucket reads have no deadline. Forget the stuck scan so the next request
-		// starts a new one instead of waiting on it. The stuck scan keeps running.
-		latestUpdateFlight.Forget(flightKey)
+		// Bucket reads have no deadline. Advance the epoch so the next request
+		// starts a new scan instead of waiting on this one, which keeps running.
+		// Only the first waiter to time out advances it; a later waiter must not
+		// move requests off a replacement scan.
+		epoch.CompareAndSwap(epochValue, epochValue+1)
 		return nil, fmt.Errorf("latest update scan timed out after %v", latestUpdateScanTimeout)
 	}
 	if result.Err != nil {
@@ -311,10 +313,28 @@ var (
 	latestUpdateFlight singleflight.Group
 	// Incremented by every publish. ponytail: process-local, so with a shared
 	// cache a scan on another replica can still re-cache the old update.
-	latestUpdateGeneration  atomic.Uint64
-	scanLatestUpdateFunc    = scanLatestUpdate
-	latestUpdateScanTimeout = 30 * time.Second
+	latestUpdateGeneration atomic.Uint64
+	// Held for writing by a publish, for reading by a scan's check and cache write.
+	latestUpdateCacheMu sync.RWMutex
+	// Per cache key, advanced when a scan times out.
+	latestUpdateFlightEpochs sync.Map
+	scanLatestUpdateFunc     = scanLatestUpdate
+	latestUpdateScanTimeout  = 30 * time.Second
 )
+
+func latestUpdateFlightEpoch(cacheKey string) *atomic.Uint64 {
+	epoch, _ := latestUpdateFlightEpochs.LoadOrStore(cacheKey, new(atomic.Uint64))
+	return epoch.(*atomic.Uint64)
+}
+
+// invalidateLatestUpdate drops the cached latest update after a publish, and
+// stops any scan that started before it from caching its older result.
+func invalidateLatestUpdate(cacheKey string) {
+	latestUpdateCacheMu.Lock()
+	defer latestUpdateCacheMu.Unlock()
+	latestUpdateGeneration.Add(1)
+	cache2.GetCache().Delete(cacheKey)
+}
 
 func scanLatestUpdate(branch string, runtimeVersion string, platform string) (*types.Update, error) {
 	// List the runtime's updates (the bucket derives CreatedAt from the updateId, so
