@@ -328,7 +328,9 @@ const (
 	// A failed refresh keeps the last mapping in use, at most this long.
 	channelMappingMaxAge = time.Hour
 	// A channel created a moment ago must not get the expired-preview rollback
-	// for long, so "no mapping" is never served older than this.
+	// for long, so "no mapping" is never served older than this. ponytail: the
+	// local cache frees an expired entry only when it is read, so each unknown
+	// channel name a client sends stays in memory; sweep if that grows.
 	noChannelMappingMaxAge = 10 * time.Second
 )
 
