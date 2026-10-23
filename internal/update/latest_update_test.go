@@ -1,6 +1,7 @@
 package update
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
@@ -253,12 +254,17 @@ func TestLatestUpdateFlightEpochOnlyStoredOnTimeout(t *testing.T) {
 const fakeScanDelay = 150 * time.Millisecond
 
 // ageLatestUpdate makes the cached latest update look older than the
-// freshness window and returns the value it left in the cache. On a cache
-// with only the 1800 s TTL, that is the first read after expiry.
+// freshness window and returns the value it left in the cache.
 func ageLatestUpdate(t *testing.T, cacheKey string) string {
 	t.Helper()
-	cache2.GetCache().Delete(cacheKey)
-	return ""
+	cached, ok := readLatestUpdate(cacheKey)
+	require.True(t, ok)
+	cached.FetchedAt = time.Now().Add(-latestUpdateFreshFor)
+	value, err := json.Marshal(cached)
+	require.NoError(t, err)
+	ttl := 1800
+	require.NoError(t, cache2.GetCache().Set(cacheKey, string(value), &ttl))
+	return string(value)
 }
 
 // fakeLatestUpdateScan makes every scan take fakeScanDelay and find the update
@@ -365,7 +371,8 @@ func TestPublishDuringStaleRefreshWins(t *testing.T) {
 
 	close(release)
 	require.Equal(t, "100", <-staleRead)
-	require.Never(t, func() bool { return latestUpdateId() != "200" }, 100*time.Millisecond, 5*time.Millisecond,
-		"the refresh that started before the publish cached its result")
+	for deadline := time.Now().Add(100 * time.Millisecond); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		require.Equal(t, "200", latestUpdateId(), "the refresh that started before the publish cached its result")
+	}
 	require.Equal(t, int32(3), scans.Load())
 }

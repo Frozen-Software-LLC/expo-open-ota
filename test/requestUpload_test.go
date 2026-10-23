@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	"expo-open-ota/internal/bucket"
-	cache2 "expo-open-ota/internal/cache"
 	"expo-open-ota/internal/handlers"
 	"expo-open-ota/internal/services"
 	"expo-open-ota/internal/update"
@@ -439,9 +438,7 @@ func TestShouldPreserveCacheOnUploadRequest(t *testing.T) {
 	r = mux.SetURLVars(r, map[string]string{"BRANCH": "branch-1"})
 	r.Header.Set("expo-session", "expo_test_session")
 	sampleUpdatePath := filepath.Join(projectRoot, "/test/test-updates/branch-1/1/1674170951")
-	cache := cache2.GetCache()
-	cacheKey := update.ComputeLastUpdateCacheKey("branch-1", "1", "android")
-	value := cache.Get(cacheKey)
+	value := cachedLatestUpdateJSON("branch-1", "1", "android")
 	expectedValue := "{\"branch\":\"branch-1\",\"runtimeVersion\":\"1\",\"updateId\":\"1674170951\",\"createdAt\":1674170951000000}"
 	assert.Equal(t, expectedValue, value, "Expected a specific cache value")
 	uploadRequestsInput := ComputeUploadRequestsInput(sampleUpdatePath)
@@ -453,7 +450,7 @@ func TestShouldPreserveCacheOnUploadRequest(t *testing.T) {
 	handlers.RequestUploadUrlHandler(w, r)
 	assert.Equal(t, 200, w.Code, "Expected status code 200")
 	assert.NotEmpty(t, w.Header().Get("expo-update-id"), "Expected non-empty update ID")
-	value = cache.Get(cacheKey)
+	value = cachedLatestUpdateJSON("branch-1", "1", "android")
 	assert.Equal(t, expectedValue, value, "Expected cache to be preserved after RequestUploadUrl")
 }
 
