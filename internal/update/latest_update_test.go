@@ -178,8 +178,7 @@ func TestLatestUpdateLateTimeoutKeepsReplacementScan(t *testing.T) {
 
 	cacheKey := ComputeLastUpdateCacheKey("branch-2", "1", "ios")
 	cache2.GetCache().Delete(cacheKey)
-	epoch := latestUpdateFlightEpoch(cacheKey)
-	startEpoch := epoch.Load()
+	startEpoch := latestUpdateFlightEpoch(cacheKey)
 	latestUpdateScanTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { latestUpdateScanTimeout = 30 * time.Second })
 	release1, release2, stuckDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -215,7 +214,7 @@ func TestLatestUpdateLateTimeoutKeepsReplacementScan(t *testing.T) {
 	if <-b == nil {
 		t.Fatal("late waiter: want timeout error")
 	}
-	if got := epoch.Load(); got != startEpoch+1 {
+	if got := latestUpdateFlightEpoch(cacheKey); got != startEpoch+1 {
 		t.Fatalf("epoch advanced %d times, want 1", got-startEpoch)
 	}
 	d := call() // must join the replacement scan
@@ -229,5 +228,21 @@ func TestLatestUpdateLateTimeoutKeepsReplacementScan(t *testing.T) {
 	}
 	if n := scans.Load(); n != 2 {
 		t.Fatalf("%d scans, want 2", n)
+	}
+}
+
+// Keys that never timed out must not keep timeout state in memory.
+func TestLatestUpdateFlightEpochOnlyStoredOnTimeout(t *testing.T) {
+	t.Setenv("STORAGE_MODE", "local")
+	t.Setenv("LOCAL_BUCKET_BASE_PATH", "../../test/test-updates")
+	bucket.ResetBucketInstance()
+	t.Cleanup(bucket.ResetBucketInstance)
+
+	cacheKey := ComputeLastUpdateCacheKey("branch-2", "no-such-runtime", "ios")
+	if _, err := GetLatestUpdateBundlePathForRuntimeVersion("branch-2", "no-such-runtime", "ios"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := latestUpdateFlightEpochs.Load(cacheKey); ok {
+		t.Fatal("timeout state stored for a key that never timed out")
 	}
 }

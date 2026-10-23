@@ -258,8 +258,7 @@ func GetLatestUpdateBundlePathForRuntimeVersion(branch string, runtimeVersion st
 	// publish never joins a scan that started before it, and the timeout epoch,
 	// so a request made after a timeout never joins the stuck scan.
 	generation := latestUpdateGeneration.Load()
-	epoch := latestUpdateFlightEpoch(cacheKey)
-	epochValue := epoch.Load()
+	epochValue := latestUpdateFlightEpoch(cacheKey)
 	flightKey := fmt.Sprintf("%s:%d:%d", cacheKey, generation, epochValue)
 	flight := latestUpdateFlight.DoChan(flightKey, func() (interface{}, error) {
 		// A caller that missed just before the previous flight filled the cache.
@@ -295,7 +294,8 @@ func GetLatestUpdateBundlePathForRuntimeVersion(branch string, runtimeVersion st
 		// starts a new scan instead of waiting on this one, which keeps running.
 		// Only the first waiter to time out advances it; a later waiter must not
 		// move requests off a replacement scan.
-		epoch.CompareAndSwap(epochValue, epochValue+1)
+		epoch, _ := latestUpdateFlightEpochs.LoadOrStore(cacheKey, new(atomic.Uint64))
+		epoch.(*atomic.Uint64).CompareAndSwap(epochValue, epochValue+1)
 		return nil, fmt.Errorf("latest update scan timed out after %v", latestUpdateScanTimeout)
 	}
 	if result.Err != nil {
@@ -316,15 +316,18 @@ var (
 	latestUpdateGeneration atomic.Uint64
 	// Held for writing by a publish, for reading by a scan's check and cache write.
 	latestUpdateCacheMu sync.RWMutex
-	// Per cache key, advanced when a scan times out.
+	// Per cache key, advanced when a scan times out. Only keys that timed out
+	// get an entry, so client-chosen runtime versions do not grow it.
 	latestUpdateFlightEpochs sync.Map
 	scanLatestUpdateFunc     = scanLatestUpdate
 	latestUpdateScanTimeout  = 30 * time.Second
 )
 
-func latestUpdateFlightEpoch(cacheKey string) *atomic.Uint64 {
-	epoch, _ := latestUpdateFlightEpochs.LoadOrStore(cacheKey, new(atomic.Uint64))
-	return epoch.(*atomic.Uint64)
+func latestUpdateFlightEpoch(cacheKey string) uint64 {
+	if epoch, ok := latestUpdateFlightEpochs.Load(cacheKey); ok {
+		return epoch.(*atomic.Uint64).Load()
+	}
+	return 0
 }
 
 // invalidateLatestUpdate drops the cached latest update after a publish, and
