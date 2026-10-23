@@ -269,7 +269,7 @@ func ageLatestUpdate(t *testing.T, cacheKey string) string {
 }
 
 // fakeLatestUpdateScan makes every scan take fakeScanDelay and find the update
-// whose ID head holds when the scan starts.
+// whose ID head holds when the scan starts, or none when head is empty.
 func fakeLatestUpdateScan(t *testing.T, head *atomic.Value) *atomic.Int32 {
 	t.Helper()
 	var scans atomic.Int32
@@ -277,6 +277,9 @@ func fakeLatestUpdateScan(t *testing.T, head *atomic.Value) *atomic.Int32 {
 		updateId := head.Load().(string)
 		scans.Add(1)
 		time.Sleep(fakeScanDelay)
+		if updateId == "" {
+			return nil, nil
+		}
 		return &types.Update{Branch: branch, RuntimeVersion: runtimeVersion, UpdateId: updateId}, nil
 	}
 	t.Cleanup(func() { scanLatestUpdateFunc = scanLatestUpdate })
@@ -379,4 +382,18 @@ func TestPublishDuringStaleRefreshWins(t *testing.T) {
 		require.Equal(t, "200", latestUpdateId("stale-branch"), "the refresh that started before the publish cached its result")
 	}
 	require.Equal(t, int32(3), scans.Load())
+}
+
+func TestRemovedUpdateIsNotServedAfterRefresh(t *testing.T) {
+	var head atomic.Value
+	head.Store("100")
+	fakeLatestUpdateScan(t, &head)
+	cacheKey := freshLatestUpdateKey(t, "removed-branch")
+	require.Equal(t, "100", latestUpdateId("removed-branch"))
+	aged := ageLatestUpdate(t, cacheKey)
+
+	head.Store("")
+	require.Equal(t, "100", latestUpdateId("removed-branch"), "a stale read answers from the cache")
+	waitForCacheChange(t, cacheKey, aged)
+	require.Equal(t, "", latestUpdateId("removed-branch"))
 }

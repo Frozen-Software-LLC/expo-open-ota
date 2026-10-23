@@ -285,18 +285,22 @@ func loadLatestUpdate(cacheKey, branch, runtimeVersion, platform string) (*types
 			return &cached.Update, nil
 		}
 		latest, err := scanLatestUpdateFunc(branch, runtimeVersion, platform)
-		if err != nil || latest == nil {
-			return latest, err
-		}
-		cacheValue, err := json.Marshal(cachedLatestUpdate{Update: *latest, FetchedAt: time.Now()})
 		if err != nil {
-			return latest, nil
+			return nil, err
 		}
 		// A publish during the scan already deleted the key; do not write the old
-		// result. The read lock keeps a publish out between the check and the Set.
+		// result. The read lock keeps a publish out between the check and the write.
 		latestUpdateCacheMu.RLock()
 		defer latestUpdateCacheMu.RUnlock()
-		if latestUpdateGeneration.Load() == generation {
+		if latestUpdateGeneration.Load() != generation {
+			return latest, nil
+		}
+		if latest == nil {
+			// The updates a stale entry points to were removed from the bucket.
+			cache2.GetCache().Delete(cacheKey)
+			return latest, nil
+		}
+		if cacheValue, err := json.Marshal(cachedLatestUpdate{Update: *latest, FetchedAt: time.Now()}); err == nil {
 			ttl := 1800
 			_ = cache2.GetCache().Set(cacheKey, string(cacheValue), &ttl)
 		}
