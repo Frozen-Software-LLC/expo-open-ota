@@ -27,9 +27,9 @@ type manifestKey struct {
 
 // StartBootWarmUp fills the caches that the first device requests after a
 // restart need: each channel's mapping, and the manifests of the newest
-// runtime versions of every branch a channel maps to. The returned channel
-// closes when the user branches are warm or the deadline passes, whichever is
-// first. Preview branches are warmed after that, in the background.
+// runtime versions of every user branch a channel maps to. The returned
+// channel closes when the warm-up ends or the deadline passes, whichever is
+// first.
 func StartBootWarmUp(deadline time.Duration) <-chan struct{} {
 	ready := make(chan struct{})
 	var once sync.Once
@@ -44,32 +44,22 @@ func StartBootWarmUp(deadline time.Duration) <-chan struct{} {
 			log.Printf("[BootWarmUp] error fetching channel mappings: %v", err)
 			return
 		}
-		users, previews := splitPreviewBranches(branches)
-		userKeys := manifestKeys(users)
-		warmManifests(userKeys)
-		log.Printf("[BootWarmUp] warmed %d user manifest keys in %v", len(userKeys), time.Since(start))
-		markReady()
-		previewKeys := manifestKeys(previews)
-		warmManifests(previewKeys)
-		log.Printf("[BootWarmUp] warmed %d preview manifest keys in %v", len(previewKeys), time.Since(start))
+		keys := manifestKeys(userBranches(branches))
+		warmManifests(keys)
+		log.Printf("[BootWarmUp] warmed %d manifest keys in %v", len(keys), time.Since(start))
 	}()
 	return ready
 }
 
-// Preview branches serve PR builds to the team, not to users.
-const previewBranchPrefix = "preview-pr-"
-
-// splitPreviewBranches lists each branch once; several channels can serve one branch.
-func splitPreviewBranches(branches []string) (users, previews []string) {
+// userBranches lists each branch once; several channels can serve one branch.
+// PR branches (preview-pr-*, revyl-pr-*) serve PR builds to the team. There are
+// many of them and they get little traffic, so their first request builds the
+// manifest instead of the warm-up.
+func userBranches(branches []string) []string {
 	slices.Sort(branches)
-	for _, branch := range slices.Compact(branches) {
-		if strings.HasPrefix(branch, previewBranchPrefix) {
-			previews = append(previews, branch)
-		} else {
-			users = append(users, branch)
-		}
-	}
-	return users, previews
+	return slices.DeleteFunc(slices.Compact(branches), func(branch string) bool {
+		return strings.Contains(branch, "-pr-")
+	})
 }
 
 func manifestKeys(branches []string) []manifestKey {

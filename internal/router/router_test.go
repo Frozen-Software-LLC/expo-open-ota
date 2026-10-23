@@ -1,7 +1,6 @@
 package infrastructure
 
 import (
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -183,39 +182,26 @@ func TestHealthCheckPassesAfterDeadlineWhenWarmUpHangs(t *testing.T) {
 	require.Eventually(t, func() bool { return get(server, "/hc").Code == http.StatusOK }, 2*time.Second, time.Millisecond)
 }
 
-// slowPreviewBucket holds the listing of preview branches until release closes,
-// then fails it, so the warm-up reads no more storage after release.
-type slowPreviewBucket struct {
+// prBranchBucket fails the test when the warm-up lists a PR branch.
+type prBranchBucket struct {
 	*countingBucket
-	listed  chan struct{}
-	release chan struct{}
+	t *testing.T
 }
 
-func (b *slowPreviewBucket) GetRuntimeVersions(branch string) ([]bucket.RuntimeVersionWithStats, error) {
-	if !strings.HasPrefix(branch, "preview-pr-") {
-		return b.countingBucket.GetRuntimeVersions(branch)
+func (b *prBranchBucket) GetRuntimeVersions(branch string) ([]bucket.RuntimeVersionWithStats, error) {
+	if strings.Contains(branch, "-pr-") {
+		b.t.Errorf("the boot warm-up listed PR branch %s", branch)
 	}
-	close(b.listed)
-	<-b.release
-	return nil, errors.New("storage is slow")
+	return b.countingBucket.GetRuntimeVersions(branch)
 }
 
-func TestHealthCheckPassesOnceUserBranchesAreWarm(t *testing.T) {
+func TestBootWarmUpSkipsPRBranches(t *testing.T) {
 	process := startFreshProcess(t)
-	serveExpoChannels(process, []string{"preview-pr-1"})
-	storage := &slowPreviewBucket{countingBucket: process.storage, listed: make(chan struct{}), release: make(chan struct{})}
-	bucket.SetBucketInstance(storage)
-	t.Cleanup(func() { close(storage.release) })
-	server := HoldHealthCheck(update.StartBootWarmUp(time.Minute), NewRouter())
-
-	require.Eventually(t, func() bool { return get(server, "/hc").Code == http.StatusOK }, 5*time.Second, time.Millisecond,
-		"a slow preview branch does not hold /hc")
-	select {
-	case <-storage.listed:
-	case <-time.After(5 * time.Second):
-		t.Fatal("preview branches are warmed after /hc passes")
-	}
+	serveExpoChannels(process, []string{"preview-pr-1", "revyl-pr-2"})
+	bucket.SetBucketInstance(&prBranchBucket{countingBucket: process.storage, t: t})
+	server := bootServer(t)
 	readsBefore := process.storage.reads.Load()
+
 	res := getManifest(server)
 	require.Equal(t, http.StatusOK, res.Code, res.Body.String())
 	require.Equal(t, readsBefore, process.storage.reads.Load(), "the user branch was warm before /hc passed")
