@@ -347,9 +347,7 @@ func TestSkippingNotValidUpdatesAndCache(t *testing.T) {
 	resolvedBucket := bucket.GetBucket()
 	file, _ := resolvedBucket.GetFile(*lastUpdate, ".check")
 	defer file.Reader.Close()
-	cache := cache2.GetCache()
-	cacheKey := update.ComputeLastUpdateCacheKey("branch-4", "1", "android")
-	value := cache.Get(cacheKey)
+	value := cachedLatestUpdateJSON("branch-4", "1", "android")
 	assert.Equal(t, "{\"branch\":\"branch-4\",\"runtimeVersion\":\"1\",\"updateId\":\"1674170951\",\"createdAt\":1674170951000000}", value, "Expected a specific value")
 	assert.NotNil(t, file.Reader, "Expected a file")
 }
@@ -788,7 +786,7 @@ func TestPreWarmManifestCache(t *testing.T) {
 	update.PreWarmManifestCache("branch-1", "1", "android")
 
 	// Verify lastUpdate cache was populated
-	lastUpdateCached := cache.Get(lastUpdateKey)
+	lastUpdateCached := cachedLatestUpdateJSON("branch-1", "1", "android")
 	assert.NotEqual(t, "", lastUpdateCached, "lastUpdate cache should be populated after prewarm")
 
 	// Verify metadata cache was populated

@@ -19,6 +19,22 @@ func HealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// HoldHealthCheck answers /hc with 503 until ready closes. Render sends a new
+// instance traffic only once /hc returns 200.
+func HoldHealthCheck(ready <-chan struct{}, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/hc" {
+			select {
+			case <-ready:
+			default:
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func getDashboardPath() string {
 	exePath, err := os.Executable()
 	if err != nil {

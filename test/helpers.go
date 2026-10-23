@@ -8,6 +8,7 @@ import (
 	"expo-open-ota/internal/handlers"
 	"expo-open-ota/internal/metrics"
 	"expo-open-ota/internal/types"
+	"expo-open-ota/internal/update"
 	"github.com/jarcoal/httpmock"
 	"net/http"
 	"os"
@@ -114,6 +115,14 @@ func findProjectRoot() (string, error) {
 	}
 
 	return "", os.ErrNotExist
+}
+
+// cachedLatestUpdateJSON returns the update held in the latest-update cache entry.
+func cachedLatestUpdateJSON(branch, runtimeVersion, platform string) string {
+	var entry struct{ Update json.RawMessage }
+	value := cache2.GetCache().Get(update.ComputeLastUpdateCacheKey(branch, runtimeVersion, platform))
+	_ = json.Unmarshal([]byte(value), &entry)
+	return string(entry.Update)
 }
 
 func MockExpoChannelMapping(updateBranches []map[string]interface{}, updateChannelByName map[string]interface{}) (*http.Response, error) {

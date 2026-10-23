@@ -129,7 +129,7 @@ func IsUpdateValid(update types.Update) bool {
 }
 
 func ComputeLastUpdateCacheKey(branch string, runtimeVersion string, platform string) string {
-	return fmt.Sprintf("lastUpdate:%s:%s:%s:%s", version.Version, branch, runtimeVersion, platform)
+	return fmt.Sprintf("lastUpdate-v2:%s:%s:%s:%s", version.Version, branch, runtimeVersion, platform)
 }
 
 func ComputeMetadataCacheKey(branch string, runtimeVersion string, updateId string) string {
@@ -236,22 +236,40 @@ func GetLatestUpdateBundlePathForRuntimeVersion(branch string, runtimeVersion st
 		log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - END duration=%v", time.Since(start))
 	}()
 
-	cache := cache2.GetCache()
 	cacheKey := ComputeLastUpdateCacheKey(branch, runtimeVersion, platform)
 
 	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Checking cache at %s", time.Now().Format(time.RFC3339Nano))
 	cacheStart := time.Now()
-	if cachedValue := cache.Get(cacheKey); cachedValue != "" {
+	if cached, ok := readLatestUpdate(cacheKey); ok {
 		log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Cache hit in %v", time.Since(cacheStart))
-		var update types.Update
-		err := json.Unmarshal([]byte(cachedValue), &update)
-		if err != nil {
-			return nil, err
+		if time.Since(cached.FetchedAt) >= latestUpdateFreshFor {
+			// Answer from the cache now; the refresh scans in the background.
+			latestUpdateRefresh.DoChan(cacheKey, func() (interface{}, error) {
+				return loadLatestUpdate(cacheKey, branch, runtimeVersion, platform)
+			})
 		}
-		return &update, nil
+		return &cached.Update, nil
 	}
 	log.Printf("[TRACE] GetLatestUpdateBundlePathForRuntimeVersion - Cache miss in %v", time.Since(cacheStart))
+	return loadLatestUpdate(cacheKey, branch, runtimeVersion, platform)
+}
 
+// cachedLatestUpdate is the cache entry for one branch, runtime version and platform.
+type cachedLatestUpdate struct {
+	Update    types.Update `json:"update"`
+	FetchedAt time.Time    `json:"fetchedAt"`
+}
+
+func readLatestUpdate(cacheKey string) (cachedLatestUpdate, bool) {
+	var cached cachedLatestUpdate
+	value := cache2.GetCache().Get(cacheKey)
+	if value == "" || json.Unmarshal([]byte(value), &cached) != nil {
+		return cachedLatestUpdate{}, false
+	}
+	return cached, true
+}
+
+func loadLatestUpdate(cacheKey, branch, runtimeVersion, platform string) (*types.Update, error) {
 	// A publish deletes this key, so every polling device misses at once. One scan
 	// runs per key; the rest wait for its result instead of each scanning the bucket.
 	// The flight key holds the publish generation, so a request made after a
@@ -262,27 +280,29 @@ func GetLatestUpdateBundlePathForRuntimeVersion(branch string, runtimeVersion st
 	flightKey := fmt.Sprintf("%s:%d:%d", cacheKey, generation, epochValue)
 	flight := latestUpdateFlight.DoChan(flightKey, func() (interface{}, error) {
 		// A caller that missed just before the previous flight filled the cache.
-		if cachedValue := cache.Get(cacheKey); cachedValue != "" {
-			var update types.Update
-			if err := json.Unmarshal([]byte(cachedValue), &update); err == nil {
-				return &update, nil
-			}
+		// A refresh finds the stale entry here and must scan.
+		if cached, ok := readLatestUpdate(cacheKey); ok && time.Since(cached.FetchedAt) < latestUpdateFreshFor {
+			return &cached.Update, nil
 		}
 		latest, err := scanLatestUpdateFunc(branch, runtimeVersion, platform)
-		if err != nil || latest == nil {
-			return latest, err
-		}
-		cacheValue, err := json.Marshal(latest)
 		if err != nil {
-			return latest, nil
+			return nil, err
 		}
 		// A publish during the scan already deleted the key; do not write the old
-		// result. The read lock keeps a publish out between the check and the Set.
+		// result. The read lock keeps a publish out between the check and the write.
 		latestUpdateCacheMu.RLock()
 		defer latestUpdateCacheMu.RUnlock()
-		if latestUpdateGeneration.Load() == generation {
+		if latestUpdateGeneration.Load() != generation {
+			return latest, nil
+		}
+		if latest == nil {
+			// The updates a stale entry points to were removed from the bucket.
+			cache2.GetCache().Delete(cacheKey)
+			return latest, nil
+		}
+		if cacheValue, err := json.Marshal(cachedLatestUpdate{Update: *latest, FetchedAt: time.Now()}); err == nil {
 			ttl := 1800
-			_ = cache.Set(cacheKey, string(cacheValue), &ttl)
+			_ = cache2.GetCache().Set(cacheKey, string(cacheValue), &ttl)
 		}
 		return latest, nil
 	})
@@ -309,8 +329,16 @@ func GetLatestUpdateBundlePathForRuntimeVersion(branch string, runtimeVersion st
 	return &latestCopy, nil
 }
 
+// A cached latest update older than this is still answered, while one
+// background scan per key replaces it. The 1800 s TTL bounds how long a
+// failing scan can keep the old answer.
+const latestUpdateFreshFor = 5 * time.Minute
+
 var (
 	latestUpdateFlight singleflight.Group
+	// One background refresh per cache key, waiting on latestUpdateFlight
+	// with the same timeout as a request.
+	latestUpdateRefresh singleflight.Group
 	// Incremented by every publish. ponytail: process-local, so with a shared
 	// cache a scan on another replica can still re-cache the old update.
 	latestUpdateGeneration atomic.Uint64
